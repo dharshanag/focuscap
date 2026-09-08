@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Time's up</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 24px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        color: #e7e7f0;
+        background: radial-gradient(circle at 50% 35%, #1e1e2e, #0b0b12);
+      }
+      .lock { font-size: 72px; margin-bottom: 18px; }
+      h1 { font-size: 40px; font-weight: 800; margin: 0 0 14px; letter-spacing: -0.5px; }
+      .domain { color: #a78bfa; }
+      p { font-size: 19px; opacity: 0.82; margin: 0; max-width: 520px; line-height: 1.55; }
+      .reset {
+        margin-top: 34px;
+        font-size: 14px;
+        opacity: 0.6;
+        font-variant-numeric: tabular-nums;
+      }
+      .reset b { color: #34d399; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <div class="lock">🔒</div>
+    <h1>Blocked for the day</h1>
+    <p><span class="domain" id="domain">This site</span> is out of time for today. Go do the thing you meant to do.</p>
+    <div class="reset">Resets in <b id="countdown">—</b></div>
+    <script src="time-is-up.js"></script>
+  </body>
+</html>
