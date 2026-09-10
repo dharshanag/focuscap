@@ -3,6 +3,8 @@
 // single daily budget. When today's budget is spent, those sites lock until the
 // next local day. Usage resets automatically at midnight (checked lazily).
 
+if (typeof importScripts === "function") importScripts("shared.js");
+
 const DEFAULTS = {
   focusSites: [],
   settings: { idleSeconds: 45 },
@@ -12,12 +14,6 @@ const DEFAULTS = {
 
 const get = (keys) => chrome.storage.local.get(keys);
 const set = (obj) => chrome.storage.local.set(obj);
-
-// Local calendar day key — the boundary at which the budget resets.
-function todayKey() {
-  const d = new Date();
-  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-}
 
 chrome.runtime.onInstalled.addListener(async () => {
   const cur = await get(Object.keys(DEFAULTS));
@@ -45,7 +41,7 @@ const BLOCK_PAGE = "time-is-up.html";
 // clean URL — no query string, so the address bar just reads ".../time-is-up.html".
 async function redirectToBlock(tabId, hostname) {
   await set({ lastBlocked: (hostname || "").replace(/^www\./, "") });
-  chrome.tabs.update(tabId, { url: chrome.runtime.getURL(BLOCK_PAGE) });
+  await chrome.tabs.update(tabId, { url: chrome.runtime.getURL(BLOCK_PAGE) }).catch(() => {});
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -89,7 +85,14 @@ async function guardNavigation(details) {
 chrome.webNavigation.onBeforeNavigate.addListener(guardNavigation);
 chrome.webNavigation.onHistoryStateUpdated.addListener(guardNavigation); // SPA nav
 
+let handleQueue = Promise.resolve();
 async function handle(msg) {
+  const result = handleQueue.then(() => handleLocked(msg));
+  handleQueue = result.catch(() => {});
+  return result;
+}
+
+async function handleLocked(msg) {
   const stored = await get(["focusSites", "settings", "usage", "budgetSeconds"]);
   const focusSites = stored.focusSites || [];
   const settings = stored.settings || DEFAULTS.settings;
@@ -140,4 +143,8 @@ async function handle(msg) {
   }
 
   return {};
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { DEFAULTS, todayKey, matchSite, isLocked, redirectToBlock, guardNavigation, handle };
 }

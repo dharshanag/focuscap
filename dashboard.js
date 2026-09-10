@@ -18,22 +18,11 @@ const el = (id) => document.getElementById(id);
 const get = (keys) => chrome.storage.local.get(keys);
 const set = (obj) => chrome.storage.local.set(obj);
 
-function todayKey() {
-  const d = new Date();
-  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-}
-
 function normalizeDomain(raw) {
   let d = (raw || "").trim().toLowerCase();
   d = d.replace(/^https?:\/\//, "").replace(/^www\./, "");
   d = d.split("/")[0].split(":")[0];
   return d;
-}
-
-function fmtClock(ms) {
-  const s = Math.max(0, Math.round(ms / 1000));
-  const m = Math.floor(s / 60);
-  return `${m}:${String(s % 60).padStart(2, "0")}`;
 }
 
 // Today's usage in ms — treats a stale (yesterday's) record as 0.
@@ -167,8 +156,24 @@ async function saveBudget() {
 }
 
 async function saveSettings() {
-  const idleSeconds = Math.max(5, parseInt(el("idleInput").value, 10) || DEFAULT_SETTINGS.idleSeconds);
+  const parsed = parseInt(el("idleInput").value, 10);
+  const idleSeconds = Math.max(5, Number.isNaN(parsed) ? DEFAULT_SETTINGS.idleSeconds : parsed);
   await set({ settings: { idleSeconds } });
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    removalLocked,
+    normalizeDomain,
+    fmtClock,
+    todayKey,
+    usedMsToday,
+    saveSettings,
+    saveBudget,
+    addSite,
+    removeSite,
+    load
+  };
 }
 
 el("addForm").addEventListener("submit", addSite);

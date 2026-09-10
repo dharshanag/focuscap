@@ -79,16 +79,6 @@
 
   // ---- Corner badge: how much daily time is left on this site ----
 
-  function fmtClock(ms) {
-    const s = Math.max(0, Math.round(ms / 1000));
-    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-  }
-
-  function todayKey() {
-    const d = new Date();
-    return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-  }
-
   // Compute remaining daily time straight from storage — independent of the
   // message reply, so the badge is robust to background/version mismatches.
   async function refreshBadge() {
@@ -175,4 +165,8 @@
 
   // Kick things off on load.
   evaluate();
+
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = { fmtClock, todayKey, isEngaged, mediaPlaying };
+  }
 })();
