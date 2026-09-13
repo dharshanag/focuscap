@@ -1,0 +1,13 @@
+{
+  "name": "focus-cap-companion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop menubar companion for Focus Cap — shows an OS-level full-screen overlay once the daily budget is spent.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^32.0.0"
+  }
+}

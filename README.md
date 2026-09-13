@@ -41,11 +41,32 @@ limit back up, or wait for local midnight.)
 - `background.js` — timing accountant + navigation guard (redirects to the
   blocked page when locked).
 - `content.js` — engagement detection and time reporting.
+- `shared.js` — small helpers (`todayKey()`, `fmtClock()`) shared by
+  background.js/content.js/dashboard.js.
 - `time-is-up.html/.js` — the standalone "time's up" page you're redirected to.
 - `dashboard.html/.css/.js` — the popup dashboard.
+- `test/` — Vitest + jsdom test suite (`npm test`); `.github/workflows/test.yml`
+  runs it in CI.
+- `companion/` — a desktop menubar app (Electron) that shows an OS-level,
+  always-on-top full-screen overlay once the daily budget is spent — the
+  extension alone can only block within the browser. See its README.
+- `native-host/` — the Chrome Native Messaging host that bridges the
+  extension to `companion/`. Not wired up to the extension's UI yet; see its
+  README for setup and current status.
+
+## Desktop companion (optional)
+
+The extension's lock is browser-only by design — it can't stop you from
+opening a different browser or app. `companion/` adds an OS-level overlay for
+that, fed by `native-host/` over Chrome's Native Messaging API. Both are
+scaffolds: functional on their own (try the companion app's dev-mode
+"Simulate lock" tray menu item), with the extension→native-host leg still to
+be finished. See `companion/README.md` and `native-host/README.md`.
 
 ## Ideas for next
 
-- Whole-screen (OS-level) overlay via a companion Electron/menubar app.
+- Finish wiring the extension to `native-host/` (see its README) so the real
+  lock state — not just the dev-mode simulate toggle — reaches the companion
+  app's overlay.
 - Per-site stats and a daily summary.
 - Scheduled auto-start sessions (e.g. every weekday 9–12).

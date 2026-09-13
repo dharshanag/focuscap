@@ -3,7 +3,7 @@
   "name": "Focus Cap",
   "version": "0.1.0",
   "description": "Set a daily time limit for distracting sites, then get blocked until tomorrow.",
-  "permissions": ["storage", "webNavigation"],
+  "permissions": ["storage", "webNavigation", "nativeMessaging"],
   "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "dashboard.html",

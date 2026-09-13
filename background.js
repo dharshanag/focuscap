@@ -37,10 +37,43 @@ function matchSite(hostname, sites) {
 
 const BLOCK_PAGE = "time-is-up.html";
 
+// Best-effort bridge to the desktop companion app (see native-host/ and
+// companion/) so the lock isn't limited to the browser window. Entirely
+// optional: if the native host isn't installed/registered, connectNative
+// either throws synchronously or the port disconnects immediately — either
+// way we just fall back to silently doing nothing, since the whole extension
+// must keep working with zero setup beyond "load unpacked".
+let nativePort = null;
+function getNativePort() {
+  if (nativePort) return nativePort;
+  if (typeof chrome.runtime.connectNative !== "function") return null;
+  try {
+    nativePort = chrome.runtime.connectNative("com.focuscap.host");
+    nativePort.onDisconnect.addListener(() => {
+      nativePort = null;
+    });
+  } catch (_) {
+    nativePort = null;
+  }
+  return nativePort;
+}
+
+function notifyNativeHost(patch) {
+  const port = getNativePort();
+  if (!port) return;
+  try {
+    port.postMessage(patch);
+  } catch (_) {
+    nativePort = null;
+  }
+}
+
 // Stash which site was blocked (for the page to display) and send the tab to a
 // clean URL — no query string, so the address bar just reads ".../time-is-up.html".
 async function redirectToBlock(tabId, hostname) {
-  await set({ lastBlocked: (hostname || "").replace(/^www\./, "") });
+  const lastBlocked = (hostname || "").replace(/^www\./, "");
+  await set({ lastBlocked });
+  notifyNativeHost({ locked: true, lastBlocked });
   await chrome.tabs.update(tabId, { url: chrome.runtime.getURL(BLOCK_PAGE) }).catch(() => {});
 }
 
@@ -111,9 +144,11 @@ async function handleLocked(msg) {
     if (!site) return { track: false };
     usage.lastTickAt = now;
     await set({ usage });
+    const overlay = usage.totalMs >= budgetMs;
+    notifyNativeHost({ locked: overlay, remainingMs: Math.max(0, budgetMs - usage.totalMs), budgetMs, focusSites });
     return {
       track: true,
-      overlay: usage.totalMs >= budgetMs,
+      overlay,
       remainingMs: Math.max(0, budgetMs - usage.totalMs),
       budgetMs,
       settings
@@ -128,9 +163,11 @@ async function handleLocked(msg) {
     usage.totalMs += delta;
     usage.lastTickAt = now;
     await set({ usage });
+    const overlay = usage.totalMs >= budgetMs;
+    notifyNativeHost({ locked: overlay, remainingMs: Math.max(0, budgetMs - usage.totalMs), budgetMs, focusSites });
     return {
       track: true,
-      overlay: usage.totalMs >= budgetMs,
+      overlay,
       remainingMs: Math.max(0, budgetMs - usage.totalMs),
       budgetMs,
       settings
@@ -146,5 +183,14 @@ async function handleLocked(msg) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { DEFAULTS, todayKey, matchSite, isLocked, redirectToBlock, guardNavigation, handle };
+  module.exports = {
+    DEFAULTS,
+    todayKey,
+    matchSite,
+    isLocked,
+    redirectToBlock,
+    guardNavigation,
+    handle,
+    notifyNativeHost
+  };
 }

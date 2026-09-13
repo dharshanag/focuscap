@@ -164,4 +164,40 @@ describe("background.js", () => {
     expect(bg.matchSite("m.youtube.com", sites)).toBeTruthy();
     expect(bg.matchSite("notyoutube.com", sites)).toBeUndefined();
   });
+
+  // --- Native messaging bridge to the desktop companion app (native-host/, companion/) ---
+  // Entirely optional: the extension must keep working with zero setup when
+  // the native host isn't installed/registered.
+  describe("notifyNativeHost()", () => {
+    it("no-ops silently when chrome.runtime.connectNative doesn't exist (default, no host installed)", async () => {
+      const { bg } = await loadBackground({});
+      expect(() => bg.notifyNativeHost({ locked: true })).not.toThrow();
+    });
+
+    it("no-ops silently when connectNative throws (host manifest missing/invalid)", async () => {
+      const { bg, chrome } = await loadBackground({});
+      chrome.runtime.connectNative = () => {
+        throw new Error("Specified native messaging host not found.");
+      };
+      expect(() => bg.notifyNativeHost({ locked: true })).not.toThrow();
+    });
+
+    it("forwards the patch to the native host port when connectNative succeeds", async () => {
+      const { bg, chrome } = await loadBackground({});
+      const posted = [];
+      const port = {
+        postMessage: (msg) => posted.push(msg),
+        onDisconnect: { addListener: () => {} }
+      };
+      chrome.runtime.connectNative = () => port;
+
+      bg.notifyNativeHost({ locked: true, remainingMs: 0 });
+      bg.notifyNativeHost({ locked: false, remainingMs: 42 });
+
+      expect(posted).toEqual([
+        { locked: true, remainingMs: 0 },
+        { locked: false, remainingMs: 42 }
+      ]);
+    });
+  });
 });
