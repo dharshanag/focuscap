@@ -56,12 +56,14 @@ describe("background.js", () => {
       storage: { local: { get: storage.get, set: storage.set }, onChanged: { addListener: () => {} } },
       runtime: {
         onInstalled: { addListener: () => {} },
+        onStartup: { addListener: () => {} },
         onMessage: { addListener: () => {} },
         sendMessage: () => Promise.resolve({}),
         getURL: (p) => p
       },
       tabs: { update: () => Promise.resolve() },
-      webNavigation: { onBeforeNavigate: { addListener: () => {} }, onHistoryStateUpdated: { addListener: () => {} } }
+      webNavigation: { onBeforeNavigate: { addListener: () => {} }, onHistoryStateUpdated: { addListener: () => {} } },
+      alarms: { create: () => {}, onAlarm: { addListener: () => {} } }
     });
     vi.resetModules();
     vi.useFakeTimers();
@@ -198,6 +200,80 @@ describe("background.js", () => {
         { locked: true, remainingMs: 0 },
         { locked: false, remainingMs: 42 }
       ]);
+    });
+  });
+
+  // --- Midnight unlock push: without this, the companion app's overlay can
+  // stay stuck "locked" past the actual local-midnight reset if nothing is
+  // actively heartbeating right at midnight. ---
+  describe("daily reset alarm", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("nextLocalMidnightMs() returns the very next local midnight, not today's or one further out", async () => {
+      const { bg } = await loadBackground({});
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 0, 15, 15, 30, 0)); // Jan 15, 2026, 3:30pm local
+      expect(bg.nextLocalMidnightMs()).toBe(new Date(2026, 0, 16, 0, 0, 0, 0).getTime());
+    });
+
+    it("scheduleMidnightAlarm() creates a recurring daily alarm timed for the next local midnight", async () => {
+      const { bg, chrome } = await loadBackground({});
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 0, 15, 9, 0, 0));
+
+      bg.scheduleMidnightAlarm();
+
+      expect(chrome.alarms.create).toHaveBeenCalledWith(bg.DAILY_RESET_ALARM, {
+        when: new Date(2026, 0, 16, 0, 0, 0, 0).getTime(),
+        periodInMinutes: 24 * 60
+      });
+    });
+
+    it("schedules the alarm on both extension install and browser startup", async () => {
+      const { bg, listeners, chrome } = await loadBackground({});
+      void bg;
+
+      await listeners.onInstalled[0]();
+      expect(chrome.alarms.create).toHaveBeenCalledTimes(1);
+
+      listeners.onStartup[0]();
+      expect(chrome.alarms.create).toHaveBeenCalledTimes(2);
+    });
+
+    it("firing the alarm pushes an unlocked notification with today's budget/sites, regardless of activity", async () => {
+      // budgetSeconds is deliberately NOT DEFAULTS.budgetSeconds (1800) — if
+      // the handler ever regressed to using a hardcoded/default value
+      // instead of a fresh storage read, this assertion would catch it
+      // (it wouldn't if the fixture happened to equal the default).
+      const { bg, chrome, listeners } = await loadBackground({
+        focusSites: [{ domain: "youtube.com" }],
+        budgetSeconds: 900
+      });
+      void bg;
+      const posted = [];
+      chrome.runtime.connectNative = () => ({
+        postMessage: (msg) => posted.push(msg),
+        onDisconnect: { addListener: () => {} }
+      });
+
+      await listeners.onAlarm[0]({ name: bg.DAILY_RESET_ALARM });
+
+      expect(posted).toEqual([
+        { locked: false, remainingMs: 900_000, budgetMs: 900_000, focusSites: [{ domain: "youtube.com" }], lastBlocked: "" }
+      ]);
+    });
+
+    it("ignores alarms with a different name (doesn't touch storage or the native host)", async () => {
+      const { bg, chrome, listeners } = await loadBackground({});
+      void bg;
+      chrome.runtime.connectNative = () => {
+        throw new Error("should not be called for an unrelated alarm");
+      };
+
+      await expect(listeners.onAlarm[0]({ name: "some-other-alarm" })).resolves.toBeUndefined();
+      expect(chrome.storage.local.get).not.toHaveBeenCalled();
     });
   });
 });

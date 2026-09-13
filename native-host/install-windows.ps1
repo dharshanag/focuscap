@@ -1,10 +1,11 @@
 # Registers the Focus Cap native messaging host for Chrome on Windows.
-# Usage: .\install-windows.ps1 -ExtensionId <EXTENSION_ID>
-# Find <EXTENSION_ID> at chrome://extensions with Developer mode on, after
-# loading the unpacked extension from the repo root.
+# Usage: .\install-windows.ps1 [-ExtensionId <EXTENSION_ID>]
+# manifest.json pins a stable ID via its "key" field, so as long as you loaded
+# the repo's own manifest.json unpacked, the default below is already correct
+# and you don't need to pass anything. Only pass -ExtensionId if you
+# regenerated your own "key" (and therefore a different ID).
 param(
-  [Parameter(Mandatory = $true)]
-  [string]$ExtensionId
+  [string]$ExtensionId = "oladakapegoiphmpicedkgnieanibbbe"
 )
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path

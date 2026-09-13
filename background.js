@@ -22,6 +22,38 @@ chrome.runtime.onInstalled.addListener(async () => {
     if (cur[k] === undefined) patch[k] = DEFAULTS[k];
   }
   if (Object.keys(patch).length) await set(patch);
+  scheduleMidnightAlarm();
+});
+
+// The companion app (see companion/) only learns about lock state when the
+// extension tells it to (via notifyNativeHost, below) — it has no visibility
+// into chrome.storage itself. Usage naturally resets at midnight the next
+// time handleLocked() runs (see the daily-rollover check there), but if
+// nothing's actively heartbeating right at midnight, the companion's overlay
+// would otherwise stay stuck "locked" until the next heartbeat. This alarm
+// proactively pushes an unlocked notification at local midnight regardless
+// of browsing activity. chrome.alarms.create() with a name that already
+// exists replaces it, so calling this on every install/startup is safe.
+const DAILY_RESET_ALARM = "dailyReset";
+
+function nextLocalMidnightMs() {
+  const midnight = new Date();
+  midnight.setHours(24, 0, 0, 0); // next local midnight
+  return midnight.getTime();
+}
+
+function scheduleMidnightAlarm() {
+  chrome.alarms.create(DAILY_RESET_ALARM, { when: nextLocalMidnightMs(), periodInMinutes: 24 * 60 });
+}
+
+chrome.runtime.onStartup.addListener(scheduleMidnightAlarm);
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== DAILY_RESET_ALARM) return;
+  const stored = await get(["focusSites", "budgetSeconds"]);
+  const focusSites = stored.focusSites || [];
+  const budgetMs = (stored.budgetSeconds ?? DEFAULTS.budgetSeconds) * 1000;
+  notifyNativeHost({ locked: false, remainingMs: budgetMs, budgetMs, focusSites, lastBlocked: "" });
 });
 
 // Match a page hostname against the user's distraction list.
@@ -191,6 +223,9 @@ if (typeof module !== "undefined" && module.exports) {
     redirectToBlock,
     guardNavigation,
     handle,
-    notifyNativeHost
+    notifyNativeHost,
+    nextLocalMidnightMs,
+    scheduleMidnightAlarm,
+    DAILY_RESET_ALARM
   };
 }

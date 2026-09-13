@@ -22,27 +22,34 @@ shell).
 
 ## Register it
 
-You need your unpacked extension's ID first: load the extension (see the
-repo root README), then open `chrome://extensions` with Developer mode on
-and copy the ID shown under "Focus Cap".
+`../manifest.json` pins a stable unpacked-extension ID via its `"key"`
+field, so as long as you load the repo's own `manifest.json` unpacked (see
+the root README), no manual ID lookup is needed — the install scripts
+already default to the right ID.
 
-- **macOS:** `./install-mac.sh <EXTENSION_ID>`
-- **Ubuntu/Linux:** `./install-linux.sh <EXTENSION_ID>`
-- **Windows:** `.\install-windows.ps1 -ExtensionId <EXTENSION_ID>` (PowerShell)
+- **macOS:** `./install-mac.sh`
+- **Ubuntu/Linux:** `./install-linux.sh`
+- **Windows:** `.\install-windows.ps1` (PowerShell)
+
+(If you ever regenerate your own `"key"` in manifest.json, your extension ID
+will change too — pass it explicitly, e.g. `./install-mac.sh <EXTENSION_ID>`
+or `.\install-windows.ps1 -ExtensionId <EXTENSION_ID>`.)
 
 Each writes a `com.focuscap.host.json` native messaging host manifest to the
 right per-OS location (see each script) pointing at `host.js`
 (`host.bat` wrapper on Windows, since Chrome can't run a `.js` shebang
-directly there) and restricts `allowed_origins` to your extension ID. Restart
+directly there) and restricts `allowed_origins` to the extension ID. Restart
 Chrome afterwards.
 
-## What's NOT wired up yet
+## Status
 
-The extension itself doesn't call `chrome.runtime.connectNative()` yet —
-`manifest.json` doesn't request the `nativeMessaging` permission, and
-`background.js` doesn't send state over. That's the next step once this
-host + the companion app are both confirmed working (via the companion's
-"Simulate lock/unlock" dev menu items).
+`background.js` already requests the `nativeMessaging` permission and
+best-effort posts lock state via `chrome.runtime.connectNative("com.focuscap.host")`
+whenever it changes (see `notifyNativeHost()`). Once this host is registered
+per the steps above and Chrome is restarted, that's the whole extension→host
+leg — no extension code changes needed. Verify with the manual test below,
+or by watching `~/.focuscap/state.json` update while browsing a tracked site
+with the extension loaded.
 
 ## Test the host manually, without Chrome at all
 

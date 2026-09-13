@@ -9,10 +9,12 @@ export function createChromeMock(initialStorage = {}) {
   let store = clone(initialStorage);
   const listeners = {
     onInstalled: [],
+    onStartup: [],
     onMessage: [],
     onChanged: [],
     onBeforeNavigate: [],
-    onHistoryStateUpdated: []
+    onHistoryStateUpdated: [],
+    onAlarm: []
   };
 
   const chrome = {
@@ -28,6 +30,7 @@ export function createChromeMock(initialStorage = {}) {
     },
     runtime: {
       onInstalled: { addListener: vi.fn((fn) => listeners.onInstalled.push(fn)) },
+      onStartup: { addListener: vi.fn((fn) => listeners.onStartup.push(fn)) },
       onMessage: { addListener: vi.fn((fn) => listeners.onMessage.push(fn)) },
       sendMessage: vi.fn(() => Promise.resolve({})),
       getURL: vi.fn((path) => `chrome-extension://test-extension-id/${path}`)
@@ -38,6 +41,10 @@ export function createChromeMock(initialStorage = {}) {
     webNavigation: {
       onBeforeNavigate: { addListener: vi.fn((fn) => listeners.onBeforeNavigate.push(fn)) },
       onHistoryStateUpdated: { addListener: vi.fn((fn) => listeners.onHistoryStateUpdated.push(fn)) }
+    },
+    alarms: {
+      create: vi.fn(),
+      onAlarm: { addListener: vi.fn((fn) => listeners.onAlarm.push(fn)) }
     }
   };
 

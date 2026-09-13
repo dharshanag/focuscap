@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Registers the Focus Cap native messaging host for Chrome/Chromium on Linux
-# (tested target: Ubuntu). Usage: ./install-linux.sh <EXTENSION_ID>
-# Find <EXTENSION_ID> at chrome://extensions with Developer mode on, after
-# loading the unpacked extension from the repo root.
+# (tested target: Ubuntu). Usage: ./install-linux.sh [EXTENSION_ID]
+# manifest.json pins a stable ID via its "key" field, so as long as you loaded
+# the repo's own manifest.json unpacked, the default below is already correct
+# and you don't need to pass anything. Only pass an EXTENSION_ID if you
+# regenerated your own "key" (and therefore a different ID).
 set -euo pipefail
 
-EXTENSION_ID="${1:?Usage: ./install-linux.sh <EXTENSION_ID>}"
+DEFAULT_EXTENSION_ID="oladakapegoiphmpicedkgnieanibbbe"
+EXTENSION_ID="${1:-$DEFAULT_EXTENSION_ID}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 chmod +x "$SCRIPT_DIR/host.js"
