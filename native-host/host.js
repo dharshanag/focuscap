@@ -11,46 +11,78 @@
 // intentionally plain Node for the initial MVP.
 const { writeState } = require("../state-store");
 
-let buffer = Buffer.alloc(0);
+// Pulls complete length-prefixed frames out of a buffer that may hold zero,
+// one, or several messages (plus a trailing partial one still being
+// received). Pure and stateless so it's testable without a real stdin.
+function extractFrames(buffer) {
+  const frames = [];
+  let offset = 0;
+  while (buffer.length - offset >= 4) {
+    const length = buffer.readUInt32LE(offset);
+    if (buffer.length - offset < 4 + length) break; // rest hasn't arrived yet
+    frames.push(buffer.subarray(offset + 4, offset + 4 + length));
+    offset += 4 + length;
+  }
+  return { frames, rest: buffer.subarray(offset) };
+}
 
-function send(message) {
+function encodeFrame(message) {
   const json = Buffer.from(JSON.stringify(message), "utf8");
   const header = Buffer.alloc(4);
   header.writeUInt32LE(json.length, 0);
-  process.stdout.write(Buffer.concat([header, json]));
+  return Buffer.concat([header, json]);
 }
 
-function handleMessage(msg) {
-  // The extension sends its current lock-relevant state whenever it changes.
-  // Only pick known fields — never trust/forward arbitrary extension input
-  // straight into the shared state file.
+// Only pick known fields — never trust/forward arbitrary extension input
+// straight into the shared state file.
+function sanitizeStatePatch(msg) {
   const { locked, remainingMs, budgetMs, focusSites, lastBlocked } = msg || {};
-  writeState({
+  return {
     locked: !!locked,
     remainingMs: typeof remainingMs === "number" ? remainingMs : 0,
     budgetMs: typeof budgetMs === "number" ? budgetMs : 0,
     focusSites: Array.isArray(focusSites) ? focusSites : [],
     lastBlocked: typeof lastBlocked === "string" ? lastBlocked : ""
-  });
-  send({ ok: true });
+  };
 }
 
-process.stdin.on("data", (chunk) => {
-  buffer = Buffer.concat([buffer, chunk]);
-  // A single chunk can contain multiple (or partial) messages.
-  while (buffer.length >= 4) {
-    const length = buffer.readUInt32LE(0);
-    if (buffer.length < 4 + length) break; // wait for the rest
-    const body = buffer.subarray(4, 4 + length);
-    buffer = buffer.subarray(4 + length);
-    try {
-      handleMessage(JSON.parse(body.toString("utf8")));
-    } catch (err) {
-      send({ ok: false, error: String(err && err.message) });
-    }
-  }
-});
+// The only side-effecting step (writing to the shared state file) lives
+// here, deliberately kept out of the pure functions above. Testing this
+// integration by requiring state-store.js from a test would cross a real
+// Node require() (this file always runs as plain CJS, even under Chrome) vs.
+// the test's own dynamic import() — two different module caches that don't
+// share a vi.resetModules()/mock lifecycle, which caused flaky, order-
+// dependent test failures. The manual end-to-end test in native-host/README.md
+// (real wire-protocol bytes through the real host.js, checked against the
+// real state file) covers this instead.
+function runStdioLoop() {
+  let buffer = Buffer.alloc(0);
 
-// Chrome closes stdin when the extension disconnects (or is unloaded) —
-// exit cleanly rather than lingering as an orphaned process.
-process.stdin.on("end", () => process.exit(0));
+  process.stdin.on("data", (chunk) => {
+    buffer = Buffer.concat([buffer, chunk]);
+    const { frames, rest } = extractFrames(buffer);
+    buffer = rest;
+    for (const frame of frames) {
+      let response;
+      try {
+        writeState(sanitizeStatePatch(JSON.parse(frame.toString("utf8"))));
+        response = { ok: true };
+      } catch (err) {
+        response = { ok: false, error: String(err && err.message) };
+      }
+      process.stdout.write(encodeFrame(response));
+    }
+  });
+
+  // Chrome closes stdin when the extension disconnects (or is unloaded) —
+  // exit cleanly rather than lingering as an orphaned process.
+  process.stdin.on("end", () => process.exit(0));
+}
+
+// Only wire up real stdio when Chrome (or a human) runs this file directly —
+// not when a test requires it just to reach the pure functions above.
+if (require.main === module) {
+  runStdioLoop();
+}
+
+module.exports = { extractFrames, encodeFrame, sanitizeStatePatch };
