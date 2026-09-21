@@ -11,6 +11,10 @@
 
 * { box-sizing: border-box; }
 
+/* The popup viewport is sized to body's fixed width; once it's tall enough to
+   scroll, the vertical scrollbar would otherwise force a 15px horizontal one. */
+html { overflow-x: hidden; }
+
 body {
   width: 340px;
   margin: 0;
@@ -132,6 +136,65 @@ button[type="submit"], .add-form button {
   padding: 8px 12px; cursor: pointer; font-weight: 600;
 }
 .add-form button:hover { background: var(--accent); }
+
+/* Per-site rows: header line + collapsible editor */
+.site-list li { flex-wrap: wrap; }
+.site-list .row { display: flex; align-items: center; gap: 8px; width: 100%; }
+.site-list .edit {
+  background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 13px; line-height: 1; padding: 0 4px;
+}
+.site-list .edit:hover, .site-list .edit[aria-expanded="true"] { color: var(--accent); }
+
+.site-editor {
+  width: 100%;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.site-editor label { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.site-editor label > span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; flex-shrink: 0; }
+.site-editor input[type="number"] { width: 56px; text-align: right; padding: 5px 6px; }
+.site-editor .lockout-min { width: 48px; }
+.site-editor select, .site-editor input[type="time"] {
+  background: var(--panel); color: var(--text);
+  border: 1px solid rgba(255,255,255,0.12); border-radius: 6px;
+  padding: 4px 6px; font-size: 12px;
+}
+.site-editor .lockout-min[hidden] { display: none; }
+.site-editor .locked-note { color: var(--danger); }
+.site-editor :disabled { opacity: 0.45; cursor: not-allowed; }
+
+.rules { display: flex; flex-direction: column; gap: 6px; }
+.rule-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 6px;
+  align-items: center;
+  padding: 6px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 6px;
+}
+.rule-row .times { display: flex; align-items: center; gap: 4px; grid-column: 1 / -1; }
+.days { display: flex; gap: 2px; }
+.day-toggle {
+  width: 22px; height: 22px; padding: 0;
+  border-radius: 999px; border: 1px solid rgba(255,255,255,0.12);
+  background: transparent; color: var(--muted); font-size: 10px; font-weight: 600; cursor: pointer;
+}
+.day-toggle[aria-pressed="true"] { background: var(--accent-dim); color: #fff; border-color: var(--accent-dim); }
+.rule-row .remove-rule { justify-self: end; }
+.add-rule {
+  align-self: flex-start;
+  background: none; border: 1px dashed rgba(255,255,255,0.18); color: var(--muted);
+  border-radius: 6px; padding: 4px 8px; cursor: pointer; font-size: 12px;
+}
+.add-rule:hover { color: var(--text); border-color: var(--accent-dim); }
 
 .settings label {
   display: flex;

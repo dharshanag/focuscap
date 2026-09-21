@@ -109,6 +109,113 @@ function scheduleBlockedUntil(rules, date) {
   return soonest;
 }
 
+// ---- Per-site evaluation (shared by background.js enforcement and the popup) ----
+
+const SITE_DEFAULTS = {
+  budgetSeconds: 1800, // 30 min/day
+  lockoutSeconds: null, // until midnight
+  rules: []
+};
+
+function nextLocalMidnightMs(from) {
+  const midnight = from === undefined ? new Date() : new Date(from);
+  midnight.setHours(24, 0, 0, 0); // next local midnight
+  return midnight.getTime();
+}
+
+// Fill in per-site defaults for entries saved before per-site rules existed.
+function normalizeSite(site) {
+  const s = site || {};
+  return {
+    domain: s.domain || "",
+    budgetSeconds: typeof s.budgetSeconds === "number" && s.budgetSeconds >= 0 ? s.budgetSeconds : SITE_DEFAULTS.budgetSeconds,
+    // A zero/negative cool-down would expire on the very next read and hand
+    // out a fresh full budget every time — an unbounded-budget loophole. Treat
+    // anything non-positive as "until midnight".
+    lockoutSeconds: typeof s.lockoutSeconds === "number" && s.lockoutSeconds > 0 ? s.lockoutSeconds : SITE_DEFAULTS.lockoutSeconds,
+    // Drop non-object entries (corrupt storage) so consumers can index rule
+    // fields without guarding every access.
+    rules: Array.isArray(s.rules) ? s.rules.filter((r) => r && typeof r === "object") : SITE_DEFAULTS.rules
+  };
+}
+
+// Bring a stored usage record up to date for `now`: a new calendar day wipes
+// everything, and a per-site cool-down that has expired hands that site a
+// fresh allowance (otherwise it'd re-lock on the very next heartbeat).
+// Pure — callers decide whether to persist the result.
+function normalizeUsage(stored, now) {
+  const today = todayKey();
+  let usage = stored && typeof stored === "object" ? stored : null;
+  if (!usage || usage.date !== today) usage = { date: today, totalMs: 0, sites: {} };
+  const sites = {};
+  const storedSites = usage.sites && typeof usage.sites === "object" ? usage.sites : {};
+  for (const [domain, raw] of Object.entries(storedSites)) {
+    // Tolerate a corrupted entry rather than throwing — a rejection here in
+    // guardNavigation would leave the navigation UNBLOCKED.
+    const rec = raw && typeof raw === "object" ? raw : {};
+    const r = { totalMs: rec.totalMs || 0, lastTickAt: rec.lastTickAt, lockedUntil: rec.lockedUntil };
+    if (typeof r.lockedUntil === "number" && now >= r.lockedUntil) {
+      r.totalMs = 0;
+      r.lockedUntil = undefined;
+    }
+    sites[domain] = r;
+  }
+  return { date: usage.date, totalMs: usage.totalMs || 0, sites };
+}
+
+function siteUsage(usage, domain) {
+  return usage.sites[domain] || (usage.sites[domain] = { totalMs: 0 });
+}
+
+function lockoutEndFor(site, now) {
+  return typeof site.lockoutSeconds === "number" ? now + site.lockoutSeconds * 1000 : nextLocalMidnightMs(now);
+}
+
+// Decide whether a site is currently locked and why. Order:
+//   1. schedule (block window active, or outside every allow window)
+//   2. an in-progress cool-down lockout
+//   3. this site's own daily budget
+//   4. the global cap across all sites
+// Returns { locked, reason, until, remainingMs, budgetMs } where budgetMs /
+// remainingMs reflect the tighter of the site's and the global allowance.
+function evaluateSite(site, usage, globalBudgetMs, now) {
+  const rec = siteUsage(usage, site.domain);
+  const siteBudgetMs = site.budgetSeconds * 1000;
+  const remainingSite = Math.max(0, siteBudgetMs - rec.totalMs);
+  const remainingGlobal = Math.max(0, globalBudgetMs - usage.totalMs);
+  const remainingMs = Math.min(remainingSite, remainingGlobal);
+  const budgetMs = Math.min(siteBudgetMs, globalBudgetMs);
+
+  const verdict = scheduleVerdict(site.rules, new Date(now));
+  if (verdict === "block") {
+    return { locked: true, reason: "schedule", until: scheduleBlockedUntil(site.rules, new Date(now)), remainingMs, budgetMs };
+  }
+  if (typeof rec.lockedUntil === "number" && now < rec.lockedUntil) {
+    return { locked: true, reason: "lockout", until: rec.lockedUntil, remainingMs: 0, budgetMs };
+  }
+  if (rec.totalMs >= siteBudgetMs) {
+    return { locked: true, reason: "budget", until: lockoutEndFor(site, now), remainingMs: 0, budgetMs };
+  }
+  if (usage.totalMs >= globalBudgetMs) {
+    return { locked: true, reason: "global", until: nextLocalMidnightMs(now), remainingMs: 0, budgetMs };
+  }
+  return { locked: false, reason: null, until: null, remainingMs, budgetMs };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { todayKey, fmtClock, parseHHMM, ruleActiveAt, scheduleVerdict, scheduleBlockedUntil };
+  module.exports = {
+    todayKey,
+    fmtClock,
+    parseHHMM,
+    ruleActiveAt,
+    scheduleVerdict,
+    scheduleBlockedUntil,
+    SITE_DEFAULTS,
+    nextLocalMidnightMs,
+    normalizeSite,
+    normalizeUsage,
+    siteUsage,
+    lockoutEndFor,
+    evaluateSite
+  };
 }

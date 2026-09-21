@@ -17,11 +17,10 @@ if (typeof importScripts === "function") importScripts("shared.js");
 //   budgetSeconds: the GLOBAL cap across all sites per day (the key predates
 //     per-site budgets and already meant "total across all sites")
 //   usage: { date, totalMs, sites: { [domain]: { totalMs, lastTickAt, lockedUntil } } }
-const SITE_DEFAULTS = {
-  budgetSeconds: 1800, // 30 min/day
-  lockoutSeconds: null, // until midnight
-  rules: []
-};
+//
+// The pure evaluation logic (SITE_DEFAULTS, normalizeSite, normalizeUsage,
+// siteUsage, evaluateSite, nextLocalMidnightMs) lives in shared.js so the
+// popup renders exactly the status this worker enforces.
 
 const DEFAULTS = {
   focusSites: [],
@@ -54,12 +53,6 @@ chrome.runtime.onInstalled.addListener(async () => {
 // exists replaces it, so calling this on every install/startup is safe.
 const DAILY_RESET_ALARM = "dailyReset";
 
-function nextLocalMidnightMs() {
-  const midnight = new Date();
-  midnight.setHours(24, 0, 0, 0); // next local midnight
-  return midnight.getTime();
-}
-
 function scheduleMidnightAlarm() {
   chrome.alarms.create(DAILY_RESET_ALARM, { when: nextLocalMidnightMs(), periodInMinutes: 24 * 60 });
 }
@@ -74,20 +67,6 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   notifyNativeHost({ locked: false, remainingMs: budgetMs, budgetMs, focusSites, lastBlocked: "" });
 });
 
-// Fill in per-site defaults for entries saved before per-site rules existed.
-function normalizeSite(site) {
-  const s = site || {};
-  return {
-    domain: s.domain || "",
-    budgetSeconds: typeof s.budgetSeconds === "number" && s.budgetSeconds >= 0 ? s.budgetSeconds : SITE_DEFAULTS.budgetSeconds,
-    // A zero/negative cool-down would expire on the very next read and hand
-    // out a fresh full budget every time — an unbounded-budget loophole. Treat
-    // anything non-positive as "until midnight".
-    lockoutSeconds: typeof s.lockoutSeconds === "number" && s.lockoutSeconds > 0 ? s.lockoutSeconds : SITE_DEFAULTS.lockoutSeconds,
-    rules: Array.isArray(s.rules) ? s.rules : SITE_DEFAULTS.rules
-  };
-}
-
 // Match a page hostname against the user's distraction list.
 // "youtube.com" matches youtube.com and www.youtube.com and m.youtube.com.
 function matchSite(hostname, sites) {
@@ -97,69 +76,6 @@ function matchSite(hostname, sites) {
     if (!d) return false;
     return h === d || h.endsWith("." + d);
   });
-}
-
-// Bring a stored usage record up to date for `now`: a new calendar day wipes
-// everything, and a per-site cool-down that has expired hands that site a
-// fresh allowance (otherwise it'd re-lock on the very next heartbeat).
-// Pure — callers decide whether to persist the result.
-function normalizeUsage(stored, now) {
-  const today = todayKey();
-  let usage = stored && typeof stored === "object" ? stored : null;
-  if (!usage || usage.date !== today) usage = { date: today, totalMs: 0, sites: {} };
-  const sites = {};
-  const storedSites = usage.sites && typeof usage.sites === "object" ? usage.sites : {};
-  for (const [domain, raw] of Object.entries(storedSites)) {
-    // Tolerate a corrupted entry rather than throwing — a rejection here in
-    // guardNavigation would leave the navigation UNBLOCKED.
-    const rec = raw && typeof raw === "object" ? raw : {};
-    const r = { totalMs: rec.totalMs || 0, lastTickAt: rec.lastTickAt, lockedUntil: rec.lockedUntil };
-    if (typeof r.lockedUntil === "number" && now >= r.lockedUntil) {
-      r.totalMs = 0;
-      r.lockedUntil = undefined;
-    }
-    sites[domain] = r;
-  }
-  return { date: usage.date, totalMs: usage.totalMs || 0, sites };
-}
-
-function siteUsage(usage, domain) {
-  return usage.sites[domain] || (usage.sites[domain] = { totalMs: 0 });
-}
-
-// Decide whether a site is currently locked and why. Order:
-//   1. schedule (block window active, or outside every allow window)
-//   2. an in-progress cool-down lockout
-//   3. this site's own daily budget
-//   4. the global cap across all sites
-// Returns { locked, reason, until, remainingMs, budgetMs } where budgetMs /
-// remainingMs reflect the tighter of the site's and the global allowance.
-function evaluateSite(site, usage, globalBudgetMs, now) {
-  const rec = siteUsage(usage, site.domain);
-  const siteBudgetMs = site.budgetSeconds * 1000;
-  const remainingSite = Math.max(0, siteBudgetMs - rec.totalMs);
-  const remainingGlobal = Math.max(0, globalBudgetMs - usage.totalMs);
-  const remainingMs = Math.min(remainingSite, remainingGlobal);
-  const budgetMs = Math.min(siteBudgetMs, globalBudgetMs);
-
-  const verdict = scheduleVerdict(site.rules, new Date(now));
-  if (verdict === "block") {
-    return { locked: true, reason: "schedule", until: scheduleBlockedUntil(site.rules, new Date(now)), remainingMs, budgetMs };
-  }
-  if (typeof rec.lockedUntil === "number" && now < rec.lockedUntil) {
-    return { locked: true, reason: "lockout", until: rec.lockedUntil, remainingMs: 0, budgetMs };
-  }
-  if (rec.totalMs >= siteBudgetMs) {
-    return { locked: true, reason: "budget", until: lockoutEndFor(site, now), remainingMs: 0, budgetMs };
-  }
-  if (usage.totalMs >= globalBudgetMs) {
-    return { locked: true, reason: "global", until: nextLocalMidnightMs(), remainingMs: 0, budgetMs };
-  }
-  return { locked: false, reason: null, until: null, remainingMs, budgetMs };
-}
-
-function lockoutEndFor(site, now) {
-  return typeof site.lockoutSeconds === "number" ? now + site.lockoutSeconds * 1000 : nextLocalMidnightMs();
 }
 
 const BLOCK_PAGE = "time-is-up.html";
