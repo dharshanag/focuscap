@@ -1,8 +1,16 @@
 # Focus Cap companion
 
-A menubar/tray app that shows an OS-level, always-on-top full-screen overlay
-once the daily budget is spent — so the lock isn't limited to the browser
-window (see the main README's "Ideas for next").
+A menubar/tray app that surfaces the extension's lock state at the OS level
+— a small, **non-blocking**, always-on-top corner pill saying which tracked
+site is out of time, visible no matter what app is in front.
+
+It deliberately does **not** cover the screen. The extension's promise is
+"distraction *sites* are locked", not "your computer is locked", and until
+the companion can detect a tracked site in the foreground (outside Chrome),
+it can't know whether blocking anything is warranted. The pill is
+click-through and never takes keyboard focus, so it can't get in the way of
+unrelated work. Site-aware enforcement is planned once foreground-window
+detection lands (see GitHub issue #8).
 
 ## Run it
 
@@ -20,19 +28,20 @@ The real hand-off from the Chrome extension goes through
 `native-host/` (a Chrome Native Messaging host — see its README), which
 isn't registered by default. Until you've set that up, use the tray menu's
 **Simulate lock (dev)** / **Simulate unlock (dev)** items to exercise the
-overlay end to end.
+pill end to end.
 
 ## How state flows in
 
 This app never talks to the extension directly — it just polls a small JSON
 file (`~/.focuscap/state.json`, see `../state-store.js`) once a second and
-shows/hides the overlay based on its `locked` field. `native-host/host.js` is
+shows/hides the pill based on its `locked` field. `native-host/host.js` is
 what actually writes that file, on messages relayed from the extension via
 `chrome.runtime.connectNative()`.
 
 ## Status
 
-This is a scaffold: the overlay and tray plumbing work today; the extension
-side isn't wired to `native-host/` yet (see `native-host/README.md` for what's
-left, and GitHub issue #8 for a note on possibly rewriting the native host in
-Rust once this MVP is validated).
+The pill, tray plumbing, and extension → native-host → state file chain all
+work end to end (verified in a real browser). What's still to come is
+site-aware enforcement — reacting only when a tracked site is actually in
+the foreground — which needs foreground-window detection (GitHub issue #8
+covers the native-bindings discussion).
