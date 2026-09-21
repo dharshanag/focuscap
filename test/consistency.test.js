@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createChromeMock } from "./helpers/chrome-mock.js";
+import { createChromeMock, stubSharedGlobals } from "./helpers/chrome-mock.js";
 // Imported once, outside of any vi.resetModules() cycle, so every stub below
 // points at the exact same todayKey/fmtClock function objects -- otherwise
 // each vi.resetModules() + re-import of shared.js would hand back a distinct
@@ -24,8 +24,7 @@ describe("todayKey()/fmtClock() stay consistent across background.js, dashboard.
   });
 
   function stubShared() {
-    vi.stubGlobal("todayKey", shared.todayKey);
-    vi.stubGlobal("fmtClock", shared.fmtClock);
+    stubSharedGlobals(shared);
   }
 
   it("todayKey() produces the same string in every copy", async () => {

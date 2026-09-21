@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createChromeMock } from "./helpers/chrome-mock.js";
+import { createChromeMock, stubSharedGlobals } from "./helpers/chrome-mock.js";
 
 // dashboard.js wires up its DOM listeners and calls load() as soon as it's
 // imported, so the required elements + chrome mock must exist first.
@@ -21,9 +21,7 @@ async function loadDashboard(initialStorage) {
   mountDashboardDom();
   const mock = createChromeMock(initialStorage);
   vi.stubGlobal("chrome", mock.chrome);
-  const shared = await import("../shared.js");
-  vi.stubGlobal("todayKey", shared.todayKey);
-  vi.stubGlobal("fmtClock", shared.fmtClock);
+  stubSharedGlobals(await import("../shared.js"));
   const dash = await import("../dashboard.js");
   return { dash, ...mock };
 }

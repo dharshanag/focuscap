@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createChromeMock, createControllableStorage, flush, microtasks } from "./helpers/chrome-mock.js";
+import { createChromeMock, createControllableStorage, flush, microtasks, stubSharedGlobals } from "./helpers/chrome-mock.js";
 
 // background.js keeps top-level state (e.g. its `chrome` reference is
 // resolved once at import time), so every test gets a fresh module instance
@@ -8,11 +8,14 @@ async function loadBackground(initialStorage) {
   vi.resetModules();
   const mock = createChromeMock(initialStorage);
   vi.stubGlobal("chrome", mock.chrome);
-  const shared = await import("../shared.js");
-  vi.stubGlobal("todayKey", shared.todayKey);
-  vi.stubGlobal("fmtClock", shared.fmtClock);
+  stubSharedGlobals(await import("../shared.js"));
   const bg = await import("../background.js");
   return { bg, ...mock };
+}
+
+function localTodayKey(ms = Date.now()) {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 }
 
 describe("background.js", () => {
@@ -47,11 +50,10 @@ describe("background.js", () => {
     const storage = createControllableStorage({
       focusSites: [{ domain: "youtube.com" }],
       budgetSeconds: 1800,
-      usage: { date: todayKey, totalMs: 0, lastTickAt: baseNow }
+      // lastTickAt is tracked per site (usage.sites[domain]), not globally.
+      usage: { date: todayKey, totalMs: 0, sites: { "youtube.com": { totalMs: 0, lastTickAt: baseNow } } }
     });
-    const shared = await import("../shared.js");
-    vi.stubGlobal("todayKey", shared.todayKey);
-    vi.stubGlobal("fmtClock", shared.fmtClock);
+    stubSharedGlobals(await import("../shared.js"));
     vi.stubGlobal("chrome", {
       storage: { local: { get: storage.get, set: storage.set }, onChanged: { addListener: () => {} } },
       runtime: {
@@ -203,6 +205,271 @@ describe("background.js", () => {
     });
   });
 
+  // --- Per-site rules: budgets, cool-down lockouts, schedules, global cap ---
+  describe("per-site rules", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    // Drive N one-second heartbeats for a hostname, with the fake clock
+    // advancing 1s each time, returning the last response.
+    async function beat(bg, hostname, seconds) {
+      let res;
+      for (let i = 0; i < seconds; i++) {
+        vi.setSystemTime(Date.now() + 1000);
+        res = await bg.handle({ type: "heartbeat", hostname });
+      }
+      return res;
+    }
+
+    function fixedClock(hour = 12) {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 0, 14, hour, 0, 0)); // Wed Jan 14 2026
+    }
+
+    it("normalizeSite() fills defaults for legacy { domain } entries (implicit migration)", async () => {
+      const { bg } = await loadBackground({});
+      expect(bg.normalizeSite({ domain: "youtube.com" })).toEqual({
+        domain: "youtube.com",
+        budgetSeconds: 1800,
+        lockoutSeconds: null,
+        rules: []
+      });
+      expect(bg.normalizeSite({ domain: "x.com", budgetSeconds: 600, lockoutSeconds: 3600, rules: [{ type: "block", days: [1], start: "09:00", end: "17:00" }] }).budgetSeconds).toBe(600);
+    });
+
+    it("exhausting one site's budget locks only that site; another site keeps tracking", async () => {
+      fixedClock();
+      const { bg, getStore } = await loadBackground({
+        focusSites: [
+          { domain: "youtube.com", budgetSeconds: 3 },
+          { domain: "reddit.com", budgetSeconds: 60 }
+        ],
+        budgetSeconds: 3600 // global cap well above both
+      });
+      await bg.handle({ type: "entering", hostname: "youtube.com" });
+      const yt = await beat(bg, "youtube.com", 3);
+      expect(yt.overlay).toBe(true);
+      expect(yt.reason).toBe("budget");
+
+      await bg.handle({ type: "entering", hostname: "reddit.com" });
+      const rd = await beat(bg, "reddit.com", 2);
+      expect(rd.overlay).toBe(false);
+      expect(rd.remainingMs).toBe(58_000);
+
+      const { usage } = getStore();
+      expect(usage.sites["youtube.com"].totalMs).toBe(3000);
+      expect(usage.sites["reddit.com"].totalMs).toBe(2000);
+      expect(usage.totalMs).toBe(5000); // global total across both
+    });
+
+    it("the global cap locks every site once total usage across sites hits it", async () => {
+      fixedClock();
+      const { bg } = await loadBackground({
+        focusSites: [
+          { domain: "youtube.com", budgetSeconds: 600 },
+          { domain: "reddit.com", budgetSeconds: 600 }
+        ],
+        budgetSeconds: 4 // global cap: 4s total
+      });
+      await bg.handle({ type: "entering", hostname: "youtube.com" });
+      await beat(bg, "youtube.com", 3);
+      await bg.handle({ type: "entering", hostname: "reddit.com" });
+      const rd = await beat(bg, "reddit.com", 1);
+      expect(rd.overlay).toBe(true);
+      expect(rd.reason).toBe("global");
+      // Even a site that never got used is locked by the cap.
+      const yt = await bg.handle({ type: "entering", hostname: "youtube.com" });
+      expect(yt.overlay).toBe(true);
+      expect(yt.reason).toBe("global");
+    });
+
+    it("remainingMs reports the tighter of the site budget and the global cap", async () => {
+      fixedClock();
+      const { bg } = await loadBackground({
+        focusSites: [{ domain: "youtube.com", budgetSeconds: 600 }],
+        budgetSeconds: 10
+      });
+      const res = await bg.handle({ type: "entering", hostname: "youtube.com" });
+      expect(res.remainingMs).toBe(10_000);
+      expect(res.budgetMs).toBe(10_000);
+    });
+
+    it("a cool-down lockout expires and hands the site a fresh allowance instead of re-locking", async () => {
+      fixedClock();
+      const { bg, getStore } = await loadBackground({
+        focusSites: [{ domain: "youtube.com", budgetSeconds: 2, lockoutSeconds: 60 }],
+        budgetSeconds: 3600
+      });
+      await bg.handle({ type: "entering", hostname: "youtube.com" });
+      const locked = await beat(bg, "youtube.com", 2);
+      expect(locked.overlay).toBe(true);
+      expect(locked.reason).toBe("budget");
+      expect(locked.until).toBe(Date.now() + 60_000);
+      expect(getStore().usage.sites["youtube.com"].lockedUntil).toBe(locked.until);
+
+      // 30s later: still in the cool-down.
+      vi.setSystemTime(Date.now() + 30_000);
+      const still = await bg.handle({ type: "entering", hostname: "youtube.com" });
+      expect(still.overlay).toBe(true);
+      expect(still.reason).toBe("lockout");
+
+      // Past the cool-down: usable again with the full budget back.
+      vi.setSystemTime(Date.now() + 31_000);
+      const again = await bg.handle({ type: "entering", hostname: "youtube.com" });
+      expect(again.overlay).toBe(false);
+      expect(again.remainingMs).toBe(2000);
+      expect(getStore().usage.sites["youtube.com"].totalMs).toBe(0);
+    });
+
+    it("without a lockout, exhausting the budget locks until local midnight", async () => {
+      fixedClock(12);
+      const { bg } = await loadBackground({
+        focusSites: [{ domain: "youtube.com", budgetSeconds: 1 }],
+        budgetSeconds: 3600
+      });
+      await bg.handle({ type: "entering", hostname: "youtube.com" });
+      const res = await beat(bg, "youtube.com", 1);
+      expect(res.overlay).toBe(true);
+      expect(res.until).toBe(new Date(2026, 0, 15, 0, 0, 0, 0).getTime());
+    });
+
+    it("an active block window locks the site regardless of budget and reports when it ends", async () => {
+      fixedClock(10); // Wed 10:00
+      const { bg, getStore } = await loadBackground({
+        focusSites: [{ domain: "youtube.com", budgetSeconds: 3600, rules: [{ type: "block", days: [3], start: "09:00", end: "17:00" }] }],
+        budgetSeconds: 3600
+      });
+      const res = await bg.handle({ type: "entering", hostname: "youtube.com" });
+      expect(res.overlay).toBe(true);
+      expect(res.reason).toBe("schedule");
+      expect(res.until).toBe(new Date(2026, 0, 14, 17, 0, 0, 0).getTime());
+      // Being schedule-blocked must not start a budget lockout.
+      expect(getStore().usage.sites["youtube.com"].lockedUntil).toBeUndefined();
+    });
+
+    it("with allow-only rules, the site is blocked outside its allow window and free inside it", async () => {
+      const rules = [{ type: "allow", days: [3], start: "18:00", end: "20:00" }];
+      fixedClock(12);
+      const { bg } = await loadBackground({
+        focusSites: [{ domain: "youtube.com", rules }],
+        budgetSeconds: 3600
+      });
+      const noon = await bg.handle({ type: "entering", hostname: "youtube.com" });
+      expect(noon.overlay).toBe(true);
+      expect(noon.reason).toBe("schedule");
+      expect(noon.until).toBe(new Date(2026, 0, 14, 18, 0, 0, 0).getTime());
+
+      vi.setSystemTime(new Date(2026, 0, 14, 19, 0, 0));
+      const evening = await bg.handle({ type: "entering", hostname: "youtube.com" });
+      expect(evening.overlay).toBe(false);
+    });
+
+    it("a new calendar day wipes per-site usage and lockouts", async () => {
+      fixedClock(23);
+      const { bg, getStore } = await loadBackground({
+        focusSites: [{ domain: "youtube.com", budgetSeconds: 1 }],
+        budgetSeconds: 3600
+      });
+      await bg.handle({ type: "entering", hostname: "youtube.com" });
+      expect((await beat(bg, "youtube.com", 1)).overlay).toBe(true);
+
+      vi.setSystemTime(new Date(2026, 0, 15, 0, 0, 1));
+      const next = await bg.handle({ type: "entering", hostname: "youtube.com" });
+      expect(next.overlay).toBe(false);
+      expect(getStore().usage.date).toBe(localTodayKey());
+      expect(getStore().usage.totalMs).toBe(0);
+    });
+
+    it("an active block window outranks an exhausted global cap in the reported reason/until", async () => {
+      // QA found no test pinned this precedence: both lock, but reason/until
+      // are persisted (lastBlockedReason/lastBlockedUntil) and shown to the user.
+      fixedClock(10);
+      const { bg } = await loadBackground({
+        focusSites: [{ domain: "youtube.com", rules: [{ type: "block", days: [3], start: "09:00", end: "17:00" }] }],
+        budgetSeconds: 1,
+        usage: { date: localTodayKey(), totalMs: 5000, sites: {} } // global cap already blown
+      });
+      const res = await bg.handle({ type: "entering", hostname: "youtube.com" });
+      expect(res.overlay).toBe(true);
+      expect(res.reason).toBe("schedule");
+      expect(res.until).toBe(new Date(2026, 0, 14, 17, 0, 0, 0).getTime());
+    });
+
+    it("treats a zero or negative lockoutSeconds as 'until midnight' (no unbounded-budget loophole)", async () => {
+      fixedClock(12);
+      const { bg } = await loadBackground({
+        focusSites: [{ domain: "youtube.com", budgetSeconds: 1, lockoutSeconds: 0 }],
+        budgetSeconds: 3600
+      });
+      expect(bg.normalizeSite({ domain: "x", lockoutSeconds: 0 }).lockoutSeconds).toBeNull();
+      expect(bg.normalizeSite({ domain: "x", lockoutSeconds: -5 }).lockoutSeconds).toBeNull();
+
+      await bg.handle({ type: "entering", hostname: "youtube.com" });
+      expect((await beat(bg, "youtube.com", 1)).overlay).toBe(true);
+      // Ten minutes later it must STILL be locked, not handed a fresh budget.
+      vi.setSystemTime(Date.now() + 10 * 60_000);
+      const later = await bg.handle({ type: "entering", hostname: "youtube.com" });
+      expect(later.overlay).toBe(true);
+      expect(later.until).toBe(new Date(2026, 0, 15, 0, 0, 0, 0).getTime());
+    });
+
+    it("a heartbeat arriving while schedule-blocked does not consume site or global budget", async () => {
+      fixedClock(10);
+      const { bg, getStore } = await loadBackground({
+        focusSites: [{ domain: "youtube.com", rules: [{ type: "block", days: [3], start: "09:00", end: "17:00" }] }],
+        budgetSeconds: 3600
+      });
+      await bg.handle({ type: "entering", hostname: "youtube.com" });
+      await beat(bg, "youtube.com", 3);
+      expect(getStore().usage.sites["youtube.com"].totalMs).toBe(0);
+      expect(getStore().usage.totalMs).toBe(0);
+    });
+
+    it("tolerates a corrupted per-site usage entry instead of throwing (which would leave navigation unblocked)", async () => {
+      fixedClock(12);
+      const { bg } = await loadBackground({
+        focusSites: [{ domain: "youtube.com", budgetSeconds: 60 }],
+        budgetSeconds: 3600,
+        usage: { date: localTodayKey(), totalMs: 0, sites: { "youtube.com": null, "reddit.com": "garbage" } }
+      });
+      const res = await bg.handle({ type: "entering", hostname: "youtube.com" });
+      expect(res.track).toBe(true);
+      expect(res.overlay).toBe(false);
+    });
+
+    it("guardNavigation() starts the cool-down when it discovers a budget lock (e.g. budget lowered below usage)", async () => {
+      fixedClock(12);
+      const { bg, getStore } = await loadBackground({
+        focusSites: [{ domain: "youtube.com", budgetSeconds: 1, lockoutSeconds: 120 }],
+        budgetSeconds: 3600,
+        // Usage already exceeds the (lowered) budget, but no lockedUntil was ever set.
+        usage: { date: localTodayKey(), totalMs: 5000, sites: { "youtube.com": { totalMs: 5000 } } }
+      });
+      await bg.guardNavigation({ frameId: 0, tabId: 1, url: "https://youtube.com/" });
+      expect(getStore().usage.sites["youtube.com"].lockedUntil).toBe(Date.now() + 120_000);
+      expect(getStore().lastBlockedReason).toBe("budget");
+    });
+
+    it("isLocked()/guardNavigation() use the same per-site rules as heartbeats", async () => {
+      fixedClock(10);
+      const { bg, chrome, getStore } = await loadBackground({
+        focusSites: [{ domain: "youtube.com", rules: [{ type: "block", days: [3], start: "09:00", end: "17:00" }] }],
+        budgetSeconds: 3600
+      });
+      const status = await bg.isLocked("m.youtube.com");
+      expect(status.locked).toBe(true);
+      expect(status.reason).toBe("schedule");
+      expect((await bg.isLocked("example.com")).locked).toBe(false);
+
+      await bg.guardNavigation({ frameId: 0, tabId: 7, url: "https://m.youtube.com/watch?v=1" });
+      expect(chrome.tabs.update).toHaveBeenCalledWith(7, { url: expect.stringContaining("time-is-up.html") });
+      expect(getStore().lastBlocked).toBe("m.youtube.com");
+      expect(getStore().lastBlockedReason).toBe("schedule");
+      expect(getStore().lastBlockedUntil).toBe(new Date(2026, 0, 14, 17, 0, 0, 0).getTime());
+    });
+  });
+
   // --- Midnight unlock push: without this, the companion app's overlay can
   // stay stuck "locked" past the actual local-midnight reset if nothing is
   // actively heartbeating right at midnight. ---
@@ -260,8 +527,16 @@ describe("background.js", () => {
 
       await listeners.onAlarm[0]({ name: bg.DAILY_RESET_ALARM });
 
+      // Sites are sent normalized (per-site defaults filled in) so the
+      // companion sees the full rule set, not just the raw stored entry.
       expect(posted).toEqual([
-        { locked: false, remainingMs: 900_000, budgetMs: 900_000, focusSites: [{ domain: "youtube.com" }], lastBlocked: "" }
+        {
+          locked: false,
+          remainingMs: 900_000,
+          budgetMs: 900_000,
+          focusSites: [{ domain: "youtube.com", budgetSeconds: 1800, lockoutSeconds: null, rules: [] }],
+          lastBlocked: ""
+        }
       ]);
     });
 

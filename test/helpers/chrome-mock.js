@@ -71,6 +71,16 @@ function clone(obj) {
   return obj === undefined ? obj : JSON.parse(JSON.stringify(obj));
 }
 
+// background.js/content.js/dashboard.js call shared.js's helpers as bare
+// globals (importScripts / script-tag load order provides them in the
+// browser). Stub every export so a newly added helper can't be silently
+// missing in one test file.
+export function stubSharedGlobals(shared) {
+  for (const [name, value] of Object.entries(shared)) {
+    if (name !== "default") vi.stubGlobal(name, value);
+  }
+}
+
 // Flushes pending microtasks/macrotasks so async chains (including ones we
 // don't hold a reference to, like fire-and-forget promises) get a chance to
 // settle before we assert on side effects.
