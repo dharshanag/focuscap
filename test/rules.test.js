@@ -6,6 +6,25 @@ const WED = 3;
 const TUE = 2;
 const at = (h, m = 0, dayOffset = 0) => new Date(2026, 0, 14 + dayOffset, h, m, 0, 0);
 
+describe("shared.js matchSite()", () => {
+  const sites = [{ domain: "YouTube.com" }, { domain: "" }, null, { domain: "www.reddit.com" }];
+
+  it("matches the bare domain, www., and subdomains, case-insensitively", () => {
+    expect(shared.matchSite("youtube.com", sites).domain).toBe("YouTube.com");
+    expect(shared.matchSite("WWW.YOUTUBE.COM", sites).domain).toBe("YouTube.com");
+    expect(shared.matchSite("m.youtube.com", sites).domain).toBe("YouTube.com");
+    expect(shared.matchSite("reddit.com", sites).domain).toBe("www.reddit.com");
+  });
+
+  it("does not match look-alike domains, and skips empty/null entries without throwing", () => {
+    expect(shared.matchSite("notyoutube.com", sites)).toBeUndefined();
+    expect(shared.matchSite("youtube.com.evil.example", sites)).toBeUndefined();
+    expect(shared.matchSite("", sites)).toBeUndefined();
+    expect(shared.matchSite("anything.example", [{ domain: "" }])).toBeUndefined();
+    expect(shared.matchSite("x.example", undefined)).toBeUndefined();
+  });
+});
+
 describe("shared.js schedule rules", () => {
   describe("parseHHMM()", () => {
     it("parses HH:MM into minutes since midnight", () => {

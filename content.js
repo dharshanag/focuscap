@@ -79,20 +79,33 @@
 
   // ---- Corner badge: how much daily time is left on this site ----
 
-  // Compute remaining daily time straight from storage — independent of the
-  // message reply, so the badge is robust to background/version mismatches.
+  // Compute THIS site's remaining time straight from storage with the same
+  // shared.js helpers background.js enforces with — independent of the
+  // message reply, so the badge is robust to background/version mismatches
+  // and can never disagree with what actually gets blocked. Reflects the
+  // tighter of the site's own budget and the global cap.
   async function refreshBadge() {
     if (!badgeEl) return;
     let store;
     try {
-      store = await chrome.storage.local.get(["budgetSeconds", "usage"]);
+      store = await chrome.storage.local.get(["focusSites", "budgetSeconds", "usage"]);
     } catch (_) {
       return; // extension context invalidated
     }
-    const budgetMs = (store.budgetSeconds ?? 1800) * 1000;
-    const usage = store.usage;
-    const usedMs = usage && usage.date === todayKey() ? usage.totalMs || 0 : 0;
-    updateBadge(Math.max(0, budgetMs - usedMs));
+    const now = Date.now();
+    // Defensive: this runs on every tracked page, so malformed storage must
+    // degrade to "no badge update", never to a thrown error or "NaN:NaN".
+    const sites = Array.isArray(store.focusSites) ? store.focusSites.map(normalizeSite) : [];
+    const site = matchSite(hostname, sites);
+    if (!site) return;
+    const globalBudgetMs = (typeof store.budgetSeconds === "number" ? store.budgetSeconds : 1800) * 1000;
+    const status = evaluateSite(site, normalizeUsage(store.usage, now), globalBudgetMs, now);
+    updateBadge(status.locked ? 0 : status.remainingMs);
+  }
+
+  // Test hook: the badge lives in a closed shadow root.
+  function badgeText() {
+    return badgeEl ? badgeEl.querySelector(".time").textContent : null;
   }
 
   function showBadge() {
@@ -167,6 +180,6 @@
   evaluate();
 
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { fmtClock, todayKey, isEngaged, mediaPlaying };
+    module.exports = { fmtClock, todayKey, isEngaged, mediaPlaying, showBadge, hideBadge, refreshBadge, badgeText };
   }
 })();

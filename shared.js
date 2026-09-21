@@ -109,7 +109,18 @@ function scheduleBlockedUntil(rules, date) {
   return soonest;
 }
 
-// ---- Per-site evaluation (shared by background.js enforcement and the popup) ----
+// ---- Per-site evaluation (shared by background.js enforcement, the popup, and the badge) ----
+
+// Match a page hostname against the user's distraction list.
+// "youtube.com" matches youtube.com and www.youtube.com and m.youtube.com.
+function matchSite(hostname, sites) {
+  const h = (hostname || "").replace(/^www\./, "").toLowerCase();
+  return (sites || []).find((s) => {
+    const d = ((s && s.domain) || "").replace(/^www\./, "").toLowerCase();
+    if (!d) return false;
+    return h === d || h.endsWith("." + d);
+  });
+}
 
 const SITE_DEFAULTS = {
   budgetSeconds: 1800, // 30 min/day
@@ -210,6 +221,7 @@ if (typeof module !== "undefined" && module.exports) {
     ruleActiveAt,
     scheduleVerdict,
     scheduleBlockedUntil,
+    matchSite,
     SITE_DEFAULTS,
     nextLocalMidnightMs,
     normalizeSite,

@@ -67,17 +67,6 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   notifyNativeHost({ locked: false, remainingMs: budgetMs, budgetMs, focusSites, lastBlocked: "" });
 });
 
-// Match a page hostname against the user's distraction list.
-// "youtube.com" matches youtube.com and www.youtube.com and m.youtube.com.
-function matchSite(hostname, sites) {
-  const h = (hostname || "").replace(/^www\./, "");
-  return sites.find((s) => {
-    const d = (s.domain || "").replace(/^www\./, "").toLowerCase();
-    if (!d) return false;
-    return h === d || h.endsWith("." + d);
-  });
-}
-
 const BLOCK_PAGE = "time-is-up.html";
 
 // Best-effort bridge to the desktop companion app (see native-host/ and
