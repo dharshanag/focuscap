@@ -90,33 +90,32 @@ describe("native-host/host.js", () => {
       });
     });
 
-    it("never trusts wrong-typed or missing fields straight through to the shared state file", async () => {
+    it("drops wrong-typed fields instead of forwarding them to the shared state file", async () => {
       const host = await import("../native-host/host.js");
       const patch = host.sanitizeStatePatch({
-        locked: "yes", // not a boolean
-        remainingMs: "soon", // not a number
-        budgetMs: null,
-        focusSites: "not-an-array",
-        lastBlocked: 12345 // not a string
+        locked: "yes", // truthy -> coerced, since it's the one field only ever read as a boolean
+        remainingMs: "soon", // not a number -> dropped
+        budgetMs: null, // -> dropped
+        focusSites: "not-an-array", // -> dropped
+        lastBlocked: 12345 // not a string -> dropped
       });
-      expect(patch).toEqual({
-        locked: true, // !!"yes"
-        remainingMs: 0,
-        budgetMs: 0,
-        focusSites: [],
-        lastBlocked: ""
-      });
+      expect(patch).toEqual({ locked: true });
+    });
+
+    it("omits absent fields (partial patch) so a block-time {locked, lastBlocked} message can't wipe budget/sites reported earlier", async () => {
+      const host = await import("../native-host/host.js");
+      const patch = host.sanitizeStatePatch({ locked: true, lastBlocked: "example.com" });
+      expect(patch).toEqual({ locked: true, lastBlocked: "example.com" });
+      expect(patch).not.toHaveProperty("budgetMs");
+      expect(patch).not.toHaveProperty("focusSites");
+      expect(patch).not.toHaveProperty("remainingMs");
     });
 
     it("handles a completely empty/undefined message without throwing", async () => {
       const host = await import("../native-host/host.js");
-      expect(host.sanitizeStatePatch(undefined)).toEqual({
-        locked: false,
-        remainingMs: 0,
-        budgetMs: 0,
-        focusSites: [],
-        lastBlocked: ""
-      });
+      expect(host.sanitizeStatePatch(undefined)).toEqual({});
+      expect(host.sanitizeStatePatch(null)).toEqual({});
+      expect(host.sanitizeStatePatch("not an object")).toEqual({});
     });
   });
 });

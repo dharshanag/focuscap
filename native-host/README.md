@@ -35,6 +35,21 @@ already default to the right ID.
 will change too — pass it explicitly, e.g. `./install-mac.sh <EXTENSION_ID>`
 or `.\install-windows.ps1 -ExtensionId <EXTENSION_ID>`.)
 
+The macOS/Linux scripts register into every Chrome channel's directory
+(Stable, Beta, Canary/Unstable, Chrome for Testing, Chromium) — each channel
+reads its own, and a manifest under only `google-chrome`/`Chrome` fails on the
+others with "Specified native messaging host not found".
+
+**Linux + custom `--user-data-dir`:** on Linux, Chrome resolves the
+user-level `NativeMessagingHosts` directory relative to the *active
+user-data-dir*, not a fixed path. The defaults above cover Chrome's default
+profile location only. If you launch Chrome with a custom `--user-data-dir`
+(browser-automation tools like `agent-browser --profile <dir>` do this), pass
+that directory as the second argument, e.g.
+`./install-linux.sh oladakapegoiphmpicedkgnieanibbbe ~/.my-chrome-profile`
+(or set `CHROME_USER_DATA_DIR`). No browser restart is needed on Linux — the
+lookup happens on each `connectNative()` call.
+
 Each writes a `com.focuscap.host.json` native messaging host manifest to the
 right per-OS location (see each script) pointing at `host.js`
 (`host.bat` wrapper on Windows, since Chrome can't run a `.js` shebang

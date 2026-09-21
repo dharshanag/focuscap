@@ -33,17 +33,22 @@ function encodeFrame(message) {
   return Buffer.concat([header, json]);
 }
 
-// Only pick known fields — never trust/forward arbitrary extension input
-// straight into the shared state file.
+// Only pick known, correctly-typed fields — never trust/forward arbitrary
+// extension input straight into the shared state file. This is a PARTIAL
+// patch: fields that are absent or wrong-typed are omitted rather than
+// defaulted, so writeState()'s merge keeps the last-known value. (The
+// extension's block-time notification only sends {locked, lastBlocked};
+// defaulting the rest to 0/[] here used to wipe budgetMs/focusSites that an
+// earlier heartbeat had already reported.)
 function sanitizeStatePatch(msg) {
-  const { locked, remainingMs, budgetMs, focusSites, lastBlocked } = msg || {};
-  return {
-    locked: !!locked,
-    remainingMs: typeof remainingMs === "number" ? remainingMs : 0,
-    budgetMs: typeof budgetMs === "number" ? budgetMs : 0,
-    focusSites: Array.isArray(focusSites) ? focusSites : [],
-    lastBlocked: typeof lastBlocked === "string" ? lastBlocked : ""
-  };
+  const src = msg && typeof msg === "object" ? msg : {};
+  const patch = {};
+  if ("locked" in src) patch.locked = !!src.locked;
+  if (typeof src.remainingMs === "number") patch.remainingMs = src.remainingMs;
+  if (typeof src.budgetMs === "number") patch.budgetMs = src.budgetMs;
+  if (Array.isArray(src.focusSites)) patch.focusSites = src.focusSites;
+  if (typeof src.lastBlocked === "string") patch.lastBlocked = src.lastBlocked;
+  return patch;
 }
 
 // The only side-effecting step (writing to the shared state file) lives
