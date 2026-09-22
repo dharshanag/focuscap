@@ -35,13 +35,23 @@ function pruneStats(stats) {
   return stats;
 }
 
-chrome.runtime.onInstalled.addListener(async () => {
+chrome.runtime.onInstalled.addListener(async (details) => {
   const cur = await get(Object.keys(DEFAULTS));
   const patch = {};
   for (const k of Object.keys(DEFAULTS)) {
     if (cur[k] === undefined) patch[k] = DEFAULTS[k];
   }
   if (Object.keys(patch).length) await set(patch);
+
+  // On first install, open the dashboard so the user can onboard. Guarded by a
+  // stored flag so it opens exactly once — not on every dev reload.
+  if (details.reason === "install") {
+    const { welcomed } = await get("welcomed");
+    if (!welcomed) {
+      await set({ welcomed: true });
+      chrome.tabs.create({ url: chrome.runtime.getURL("options.html") });
+    }
+  }
 });
 
 // Match a page hostname against the user's distraction list.
