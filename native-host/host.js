@@ -48,7 +48,26 @@ function sanitizeStatePatch(msg) {
   if (typeof src.budgetMs === "number") patch.budgetMs = src.budgetMs;
   if (Array.isArray(src.focusSites)) patch.focusSites = src.focusSites;
   if (typeof src.lastBlocked === "string") patch.lastBlocked = src.lastBlocked;
+  if (src.sites && typeof src.sites === "object" && !Array.isArray(src.sites)) {
+    patch.sites = sanitizeSites(src.sites);
+  }
   return patch;
+}
+
+// Per-site lock snapshot: { [domain]: { locked, reason, until, remainingMs } }.
+// Only known fields, only sane types; entries that aren't objects are dropped.
+function sanitizeSites(sites) {
+  const out = {};
+  for (const [domain, raw] of Object.entries(sites)) {
+    if (!domain || !raw || typeof raw !== "object") continue;
+    out[domain] = {
+      locked: !!raw.locked,
+      reason: typeof raw.reason === "string" ? raw.reason : null,
+      until: typeof raw.until === "number" ? raw.until : null,
+      remainingMs: typeof raw.remainingMs === "number" ? raw.remainingMs : 0
+    };
+  }
+  return out;
 }
 
 // The only side-effecting step (writing to the shared state file) lives
@@ -90,4 +109,4 @@ if (require.main === module) {
   runStdioLoop();
 }
 
-module.exports = { extractFrames, encodeFrame, sanitizeStatePatch };
+module.exports = { extractFrames, encodeFrame, sanitizeStatePatch, sanitizeSites };

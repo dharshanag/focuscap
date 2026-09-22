@@ -11,10 +11,12 @@ const STATE_DIR = path.join(os.homedir(), ".focuscap");
 const STATE_FILE = path.join(STATE_DIR, "state.json");
 
 const DEFAULT_STATE = {
-  locked: false,
+  locked: false, // true when ANY tracked site is currently locked
   remainingMs: 0,
   budgetMs: 0,
   focusSites: [],
+  // Per-site lock state: { [domain]: { locked, reason, until, remainingMs } }
+  sites: {},
   lastBlocked: "",
   updatedAt: 0
 };

@@ -528,16 +528,123 @@ describe("background.js", () => {
       await listeners.onAlarm[0]({ name: bg.DAILY_RESET_ALARM });
 
       // Sites are sent normalized (per-site defaults filled in) so the
-      // companion sees the full rule set, not just the raw stored entry.
+      // companion sees the full rule set, plus a per-site lock snapshot.
       expect(posted).toEqual([
         {
           locked: false,
           remainingMs: 900_000,
           budgetMs: 900_000,
           focusSites: [{ domain: "youtube.com", budgetSeconds: 1800, lockoutSeconds: null, rules: [] }],
+          sites: { "youtube.com": { locked: false, reason: null, until: null, remainingMs: 900_000 } },
           lastBlocked: ""
         }
       ]);
+    });
+
+    it("heartbeats push a per-site snapshot (which sites are locked, why, until when) to the companion", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 0, 14, 12, 0, 0));
+      const { bg, chrome } = await loadBackground({
+        focusSites: [
+          { domain: "youtube.com", budgetSeconds: 1, lockoutSeconds: 600 },
+          { domain: "reddit.com", budgetSeconds: 600 }
+        ],
+        budgetSeconds: 3600
+      });
+      const posted = [];
+      chrome.runtime.connectNative = () => ({ postMessage: (m) => posted.push(m), onDisconnect: { addListener: () => {} } });
+
+      await bg.handle({ type: "entering", hostname: "youtube.com" });
+      vi.setSystemTime(Date.now() + 1000);
+      await bg.handle({ type: "heartbeat", hostname: "youtube.com" });
+
+      const last = posted[posted.length - 1];
+      expect(last.locked).toBe(true);
+      // The snapshot is taken after the cool-down is recorded, so the site
+      // reports as an in-progress "lockout" (what the companion should show),
+      // not the momentary "budget" trigger.
+      expect(last.sites["youtube.com"]).toEqual({ locked: true, reason: "lockout", until: Date.now() + 600_000, remainingMs: 0 });
+      expect(last.sites["reddit.com"]).toEqual({ locked: false, reason: null, until: null, remainingMs: 600_000 });
+      // ...and an unlock alarm is armed for the cool-down's end.
+      expect(chrome.alarms.create).toHaveBeenCalledWith("unlock:youtube.com", { when: Date.now() + 600_000 });
+    });
+
+    it("an unlock alarm persists the fresh allowance and tells the companion the site is free", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 0, 14, 12, 0, 0));
+      const lockedUntil = Date.now() + 600_000;
+      const { bg, chrome, listeners, getStore } = await loadBackground({
+        focusSites: [{ domain: "youtube.com", budgetSeconds: 60, lockoutSeconds: 600 }],
+        budgetSeconds: 3600,
+        usage: { date: localTodayKey(), totalMs: 60_000, sites: { "youtube.com": { totalMs: 60_000, lockedUntil } } }
+      });
+      const posted = [];
+      chrome.runtime.connectNative = () => ({ postMessage: (m) => posted.push(m), onDisconnect: { addListener: () => {} } });
+
+      vi.setSystemTime(lockedUntil); // the alarm fires exactly at the cool-down end
+      await listeners.onAlarm[0]({ name: bg.UNLOCK_ALARM_PREFIX + "youtube.com" });
+
+      expect(posted[0].locked).toBe(false);
+      expect(posted[0].sites["youtube.com"]).toEqual({ locked: false, reason: null, until: null, remainingMs: 60_000 });
+      expect(posted[posted.length - 1]).toEqual({ lastBlocked: "" });
+      // The reset is durable, not just recomputed on this read.
+      expect(getStore().usage.sites["youtube.com"].totalMs).toBe(0);
+      expect(getStore().usage.sites["youtube.com"].lockedUntil).toBeUndefined();
+    });
+
+    it("does not arm an unlock alarm for a lock whose end is unknown or already past", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 0, 14, 12, 0, 0));
+      const { bg, chrome } = await loadBackground({
+        // Allow-only rule whose days never match -> blocked with until: null
+        focusSites: [{ domain: "youtube.com", rules: [{ type: "allow", days: [], start: "09:00", end: "10:00" }] }],
+        budgetSeconds: 3600
+      });
+      const res = await bg.handle({ type: "entering", hostname: "youtube.com" });
+      expect(res.overlay).toBe(true);
+      expect(res.until).toBeNull();
+      const unlockCalls = chrome.alarms.create.mock.calls.filter(([name]) => String(name).startsWith("unlock:"));
+      expect(unlockCalls).toHaveLength(0);
+    });
+
+    it("an unlock alarm for a site still locked for another reason keeps lastBlocked and re-arms the later unlock", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 0, 14, 10, 0, 0)); // Wed 10:00, inside a 09-17 block window
+      const lockedUntil = Date.now() + 60_000; // cool-down ends at 10:01, but the schedule runs to 17:00
+      const { bg, chrome, listeners } = await loadBackground({
+        focusSites: [{ domain: "youtube.com", budgetSeconds: 60, lockoutSeconds: 600, rules: [{ type: "block", days: [3], start: "09:00", end: "17:00" }] }],
+        budgetSeconds: 3600,
+        usage: { date: localTodayKey(), totalMs: 60_000, sites: { "youtube.com": { totalMs: 60_000, lockedUntil } } }
+      });
+      const posted = [];
+      chrome.runtime.connectNative = () => ({ postMessage: (m) => posted.push(m), onDisconnect: { addListener: () => {} } });
+
+      vi.setSystemTime(lockedUntil);
+      await listeners.onAlarm[0]({ name: bg.UNLOCK_ALARM_PREFIX + "youtube.com" });
+
+      const windowEnd = new Date(2026, 0, 14, 17, 0, 0, 0).getTime();
+      expect(posted[0].sites["youtube.com"]).toEqual({ locked: true, reason: "schedule", until: windowEnd, remainingMs: 60_000 });
+      // Still locked -> lastBlocked must NOT be cleared...
+      expect(posted.some((m) => m.lastBlocked === "")).toBe(false);
+      // ...and the companion is told about the later unlock.
+      expect(chrome.alarms.create).toHaveBeenCalledWith("unlock:youtube.com", { when: windowEnd });
+    });
+
+    it("guardNavigation() arms an unlock alarm and pushes the snapshot (no heartbeat will follow a nav-time block)", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 0, 14, 10, 0, 0)); // Wed 10:00
+      const { bg, chrome } = await loadBackground({
+        focusSites: [{ domain: "youtube.com", rules: [{ type: "block", days: [3], start: "09:00", end: "17:00" }] }],
+        budgetSeconds: 3600
+      });
+      const posted = [];
+      chrome.runtime.connectNative = () => ({ postMessage: (m) => posted.push(m), onDisconnect: { addListener: () => {} } });
+
+      await bg.guardNavigation({ frameId: 0, tabId: 1, url: "https://youtube.com/" });
+
+      const windowEnd = new Date(2026, 0, 14, 17, 0, 0, 0).getTime();
+      expect(chrome.alarms.create).toHaveBeenCalledWith("unlock:youtube.com", { when: windowEnd });
+      expect(posted[0].sites["youtube.com"]).toEqual({ locked: true, reason: "schedule", until: windowEnd, remainingMs: 1_800_000 });
     });
 
     it("ignores alarms with a different name (doesn't touch storage or the native host)", async () => {

@@ -111,6 +111,33 @@ describe("native-host/host.js", () => {
       expect(patch).not.toHaveProperty("remainingMs");
     });
 
+    it("passes through a per-site lock snapshot with only known, sane fields", async () => {
+      const host = await import("../native-host/host.js");
+      const patch = host.sanitizeStatePatch({
+        locked: true,
+        sites: {
+          "youtube.com": { locked: true, reason: "lockout", until: 1_000, remainingMs: 0, extra: "dropped" },
+          "reddit.com": { locked: false, reason: null, until: null, remainingMs: 5_000 },
+          "bad.example": "not-an-object",
+          "": { locked: true }
+        }
+      });
+      expect(patch).toEqual({
+        locked: true,
+        sites: {
+          "youtube.com": { locked: true, reason: "lockout", until: 1_000, remainingMs: 0 },
+          "reddit.com": { locked: false, reason: null, until: null, remainingMs: 5_000 }
+        }
+      });
+    });
+
+    it("ignores a `sites` value that isn't a plain object", async () => {
+      const host = await import("../native-host/host.js");
+      expect(host.sanitizeStatePatch({ sites: ["youtube.com"] })).toEqual({});
+      expect(host.sanitizeStatePatch({ sites: "youtube.com" })).toEqual({});
+      expect(host.sanitizeStatePatch({ sites: null })).toEqual({});
+    });
+
     it("handles a completely empty/undefined message without throwing", async () => {
       const host = await import("../native-host/host.js");
       expect(host.sanitizeStatePatch(undefined)).toEqual({});

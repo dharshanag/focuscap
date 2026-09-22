@@ -59,12 +59,72 @@ function scheduleMidnightAlarm() {
 
 chrome.runtime.onStartup.addListener(scheduleMidnightAlarm);
 
-chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name !== DAILY_RESET_ALARM) return;
-  const stored = await get(["focusSites", "budgetSeconds"]);
+// Per-site lock snapshot for the companion app. `locked` is true if ANY site
+// is locked; `sites` carries each site's own state so the companion can say
+// which ones, and until when.
+function snapshotForHost(focusSites, usage, globalBudgetMs, now) {
+  const sites = {};
+  let anyLocked = false;
+  let minRemaining = globalBudgetMs;
+  for (const site of focusSites) {
+    const s = evaluateSite(site, usage, globalBudgetMs, now);
+    sites[site.domain] = { locked: s.locked, reason: s.reason, until: s.until, remainingMs: s.remainingMs };
+    if (s.locked) anyLocked = true;
+    if (s.remainingMs < minRemaining) minRemaining = s.remainingMs;
+  }
+  return { locked: anyLocked, sites, remainingMs: Math.max(0, minRemaining), budgetMs: globalBudgetMs, focusSites };
+}
+
+// A lock with a known end (cool-down, schedule window, midnight) gets an
+// alarm at that moment so the companion is told the site unlocked even if
+// nothing heartbeats. Creating an alarm with an existing name replaces it.
+const UNLOCK_ALARM_PREFIX = "unlock:";
+function scheduleUnlockAlarm(domain, until) {
+  if (typeof until !== "number" || until <= Date.now()) return;
+  chrome.alarms.create(UNLOCK_ALARM_PREFIX + domain, { when: until });
+}
+
+// Runs through the same queue as message handling so its storage write can't
+// interleave with an in-flight heartbeat's read-modify-write.
+function pushSnapshot(extra) {
+  const result = handleQueue.then(() => pushSnapshotLocked(extra));
+  handleQueue = result.catch(() => {});
+  return result;
+}
+
+async function pushSnapshotLocked(extra) {
+  const stored = await get(["focusSites", "usage", "budgetSeconds"]);
+  const now = Date.now();
   const focusSites = (stored.focusSites || []).map(normalizeSite);
-  const budgetMs = (stored.budgetSeconds ?? DEFAULTS.budgetSeconds) * 1000;
-  notifyNativeHost({ locked: false, remainingMs: budgetMs, budgetMs, focusSites, lastBlocked: "" });
+  const globalBudgetMs = (stored.budgetSeconds ?? DEFAULTS.budgetSeconds) * 1000;
+  const usage = normalizeUsage(stored.usage, now);
+  // normalizeUsage() hands an expired cool-down a fresh allowance; persist
+  // that so the reset is durable rather than recomputed on every read.
+  await set({ usage });
+  const snap = snapshotForHost(focusSites, usage, globalBudgetMs, now);
+  // A site may still be locked for a different reason with a later end (a
+  // cool-down ended while a schedule window is active) — keep the companion
+  // informed of that next unlock too.
+  for (const [domain, s] of Object.entries(snap.sites)) {
+    if (s.locked) scheduleUnlockAlarm(domain, s.until);
+  }
+  notifyNativeHost({ ...snap, ...(extra || {}) });
+  return snap;
+}
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === DAILY_RESET_ALARM) {
+    await pushSnapshot({ lastBlocked: "" });
+    return;
+  }
+  if (alarm.name.startsWith(UNLOCK_ALARM_PREFIX)) {
+    const snap = await pushSnapshot();
+    // If the site is now free, clear the stale "what was blocked" for the
+    // companion pill; if it's still locked for another reason, leave it.
+    const domain = alarm.name.slice(UNLOCK_ALARM_PREFIX.length);
+    const site = snap.sites[domain];
+    if (site && !site.locked) notifyNativeHost({ lastBlocked: "" });
+  }
 });
 
 const BLOCK_PAGE = "time-is-up.html";
@@ -108,6 +168,12 @@ async function redirectToBlock(tabId, hostname, status) {
   await chrome.tabs.update(tabId, { url: chrome.runtime.getURL(BLOCK_PAGE) }).catch(() => {});
 }
 
+// After any evaluation that found a lock, make sure the companion learns
+// about the unlock moment even if no heartbeat ever arrives.
+function armUnlock(site, status) {
+  if (status && status.locked) scheduleUnlockAlarm(site.domain, status.until);
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   handle(msg)
     .then((res) => {
@@ -131,7 +197,7 @@ async function isLocked(hostname) {
   const usage = normalizeUsage(stored.usage, now);
   const globalBudgetMs = (stored.budgetSeconds ?? DEFAULTS.budgetSeconds) * 1000;
   const status = evaluateSite(site, usage, globalBudgetMs, now);
-  return { ...status, site, focusSites, usage };
+  return { ...status, site, focusSites, usage, globalBudgetMs, now };
 }
 
 // Redirect a main-frame navigation to a locked site to the blocked page —
@@ -157,6 +223,10 @@ async function guardNavigation(details) {
       await set({ usage: status.usage });
     }
   }
+  armUnlock(status.site, status);
+  // No heartbeat will follow a navigation-time block, so push the per-site
+  // snapshot here too.
+  notifyNativeHost(snapshotForHost(status.focusSites, status.usage, status.globalBudgetMs, status.now));
   await redirectToBlock(details.tabId, hostname, status);
 }
 
@@ -200,7 +270,8 @@ async function handleLocked(msg) {
     const status = evaluateSite(site, usage, globalBudgetMs, now);
     if (status.locked && status.reason === "budget") rec.lockedUntil = status.until;
     await set({ usage });
-    notifyNativeHost({ locked: status.locked, remainingMs: status.remainingMs, budgetMs: status.budgetMs, focusSites });
+    armUnlock(site, status);
+    notifyNativeHost(snapshotForHost(focusSites, usage, globalBudgetMs, now));
     return respond(status);
   }
 
@@ -221,7 +292,8 @@ async function handleLocked(msg) {
     // Exhausting the site's own budget starts its cool-down clock.
     if (status.locked && status.reason === "budget") rec.lockedUntil = status.until;
     await set({ usage });
-    notifyNativeHost({ locked: status.locked, remainingMs: status.remainingMs, budgetMs: status.budgetMs, focusSites });
+    armUnlock(site, status);
+    notifyNativeHost(snapshotForHost(focusSites, usage, globalBudgetMs, now));
     return respond(status);
   }
 
@@ -249,6 +321,9 @@ if (typeof module !== "undefined" && module.exports) {
     notifyNativeHost,
     nextLocalMidnightMs,
     scheduleMidnightAlarm,
-    DAILY_RESET_ALARM
+    snapshotForHost,
+    pushSnapshot,
+    DAILY_RESET_ALARM,
+    UNLOCK_ALARM_PREFIX
   };
 }
