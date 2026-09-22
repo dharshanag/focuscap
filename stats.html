@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Focus Cap — Daily Stats</title>
+    <link rel="stylesheet" href="stats.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <header class="head">
+        <h1>Daily Stats</h1>
+        <div id="today" class="today"></div>
+      </header>
+
+      <section class="tiles">
+        <div class="tile">
+          <div class="tile-label">Active today</div>
+          <div id="totalActive" class="tile-value">0:00</div>
+        </div>
+        <div class="tile distraction">
+          <div class="tile-label">Distraction</div>
+          <div id="totalDistraction" class="tile-value">0:00</div>
+        </div>
+        <div class="tile productive">
+          <div class="tile-label">Productive</div>
+          <div id="totalProductive" class="tile-value">0:00</div>
+        </div>
+      </section>
+
+      <section id="suggestBox" class="suggest" hidden>
+        <div class="suggest-head">💡 Consider blocking</div>
+        <div class="suggest-sub">
+          You spent real time on these distraction sites but haven't blocked them.
+        </div>
+        <ul id="suggestList" class="suggest-list"></ul>
+      </section>
+
+      <section>
+        <h2>Where your time went today</h2>
+        <ul id="siteList" class="site-list"></ul>
+        <div id="emptyToday" class="empty" hidden>No activity tracked yet today.</div>
+      </section>
+
+      <section>
+        <h2>Last 7 days — distraction time</h2>
+        <div id="trend" class="trend"></div>
+      </section>
+    </main>
+
+    <script src="classify.js"></script>
+    <script src="stats.js"></script>
+  </body>
+</html>

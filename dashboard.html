@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Focus Cap</title>
+    <link rel="stylesheet" href="dashboard.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Focus Cap</h1>
+      <div id="statusPill" class="pill on">—</div>
+    </header>
+
+    <section class="budget-box">
+      <div id="remaining" class="remaining big"></div>
+      <div class="bar"><div id="barFill" class="bar-fill"></div></div>
+      <label class="budget-label">
+        Daily limit
+        <span class="budget-fields">
+          <input id="budgetHours" type="number" min="0" max="2" step="1" /> h
+          <input id="budgetMinutes" type="number" min="0" max="59" step="1" /> m
+        </span>
+      </label>
+      <div id="budgetNote" class="budget-note" hidden>
+        Limit reached — you can't add time until tomorrow.
+      </div>
+    </section>
+
+    <section>
+      <h2>Blocked sites</h2>
+      <ul id="siteList" class="site-list"></ul>
+      <form id="addForm" class="add-form">
+        <input id="domainInput" type="text" placeholder="youtube.com" autocomplete="off" />
+        <button type="submit">Add</button>
+      </form>
+    </section>
+
+    <div class="popup-actions">
+      <button id="statsBtn" class="stats-btn">📊 Daily stats</button>
+      <button id="dashBtn" class="stats-btn">⚙️ Dashboard &amp; schedule</button>
+    </div>
+
+    <script src="dashboard.js"></script>
+  </body>
+</html>

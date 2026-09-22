@@ -1,0 +1,161 @@
+:root {
+  --bg: #14141f;
+  --panel: #1e1e2e;
+  --text: #e7e7f0;
+  --muted: #9a9ab0;
+  --accent: #a78bfa;
+  --accent-dim: #6d5bb5;
+  --danger: #f87171;
+  --green: #34d399;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  width: 340px;
+  margin: 0;
+  padding: 14px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+h1 { font-size: 18px; margin: 0; letter-spacing: -0.3px; }
+
+h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  margin: 18px 0 8px;
+}
+
+.pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+.pill.off { background: rgba(255,255,255,0.08); color: var(--muted); }
+.pill.on { background: rgba(52,211,153,0.18); color: var(--green); font-variant-numeric: tabular-nums; }
+.pill.locked { background: rgba(248,113,113,0.18); color: var(--danger); }
+
+.budget-box {
+  margin-top: 4px;
+  padding: 14px;
+  background: var(--panel);
+  border-radius: 10px;
+}
+.budget-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 500;
+  margin-top: 12px;
+}
+.budget-label input { width: 56px; text-align: right; margin-right: 4px; }
+.budget-label span { color: var(--muted); font-size: 13px; }
+.budget-fields { display: inline-flex; align-items: center; gap: 4px; }
+.budget-fields input { width: 46px; margin-right: 2px; }
+.budget-label input:disabled { opacity: 0.45; cursor: not-allowed; }
+.budget-note { margin-top: 8px; font-size: 12px; color: var(--danger); }
+
+.remaining.big { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.remaining.live { color: var(--green); }
+.remaining.empty { color: var(--danger); }
+
+.bar {
+  height: 6px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 10px 0 2px;
+}
+.bar-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--green);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+.bar-fill.warn { background: #fbbf24; }
+.bar-fill.full { background: var(--danger); }
+
+.site-list { list-style: none; margin: 0; padding: 0; }
+.site-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border-radius: 8px;
+  margin-bottom: 6px;
+}
+.site-list .domain { flex: 1; font-weight: 500; }
+.site-list .budget { color: var(--muted); font-size: 12px; }
+.site-list li.locked { background: rgba(248,113,113,0.12); }
+.site-list li.locked .domain { color: var(--muted); text-decoration: line-through; }
+.site-list li.locked .budget { color: var(--danger); font-weight: 600; }
+.site-list .remove {
+  background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 16px; line-height: 1; padding: 0 4px;
+}
+.site-list .remove:hover { color: var(--danger); }
+.site-list .remove:disabled { opacity: 0.3; cursor: not-allowed; }
+.site-list .remove:disabled:hover { color: var(--muted); }
+.empty { color: var(--muted); font-size: 13px; padding: 4px 2px; }
+
+.add-form { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+.add-form input[type="text"] { flex: 1; min-width: 0; }
+.add-form input[type="number"] { width: 54px; }
+.add-form .unit { color: var(--muted); font-size: 12px; }
+
+input {
+  background: var(--panel);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 13px;
+}
+input:focus { outline: none; border-color: var(--accent-dim); }
+
+button[type="submit"], .add-form button {
+  background: var(--accent-dim);
+  color: #fff; border: none; border-radius: 8px;
+  padding: 8px 12px; cursor: pointer; font-weight: 600;
+}
+.add-form button:hover { background: var(--accent); }
+
+.popup-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.stats-btn {
+  width: 100%;
+  padding: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.stats-btn:hover { border-color: var(--accent-dim); color: #fff; }
+
+.settings label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.settings input { width: 64px; text-align: right; }
