@@ -1,28 +1,39 @@
 # Focus Cap
 
-A Chrome/Edge (Manifest V3) extension that gives you a **daily time budget**
-for distraction sites, then locks them once you've spent it — until tomorrow.
+A Chrome/Edge (Manifest V3) extension that gives each of your distraction
+sites its own **daily time budget, cool-down and schedule**, then locks the
+site once its rules say so.
 
 ## What it does
 
-- Add distraction domains (e.g. `youtube.com`) and set one **daily limit** —
-  the total time you're allowed on them per day.
-- No session to start. The limit is always in force.
+- Add distraction domains (e.g. `youtube.com`). Each site gets its own rules,
+  edited from the ⚙ next to it in the popup:
+  - a **daily budget** (default 30 min);
+  - what happens **after the limit**: blocked until midnight, or a
+    **cool-down** of N minutes after which the site gets a fresh allowance;
+  - **schedule rules** — *block* windows (e.g. Mon–Fri 09:00–17:00) that lock
+    the site regardless of budget, and *allow-only* windows outside of which
+    it's blocked. An active block window always wins; if a site has any allow
+    windows, it's blocked outside all of them; otherwise budgets decide.
+- One **total cap, all sites** on top: a global daily limit across every
+  tracked site, whichever runs out first.
+- No session to start. The rules are always in force.
 - A small **countdown badge** in the corner of each listed site shows how much
-  daily time you have left (amber under 2 min, red under 1 min).
+  time *that site* has left today (amber under 2 min, red under 1 min).
 - Time only accrues while a distraction site is the **active tab**, the
   **browser window is focused**, and **you're not idle** (a foreground video
   that's playing counts even without input). Background music in another tab
   never counts, because a backgrounded tab is hidden.
-- Usage pools across **all** distraction sites combined. When today's budget is
-  gone, opening any blocked site **redirects you to a standalone "Blocked for
-  the day" page** (with a live countdown to the reset) — it doesn't just cover
-  the site, it replaces it. Running out while you're already on a site redirects
-  you too.
-- No bypass. While locked you can't raise the daily limit, and you can't remove
-  a blocked site during the **last 5 minutes** of your budget (or once locked) —
-  the window you'd be tempted to game. Usage **resets automatically at local
-  midnight**.
+- When a site locks, opening it **redirects you to a standalone block page**
+  that says why — "Cooling down / Back in 42m", "Blocked right now / Unblocks
+  in 3h", or "Blocked for the day" — with a live countdown to the actual
+  unlock. It doesn't just cover the site, it replaces it.
+- No bypass. A locked site's settings are read-only until it unlocks, you
+  can't raise the total cap once it's spent, and you can't remove a site during
+  the **last 5 minutes** of its budget (or once locked). The one forgiveness: a
+  schedule rule you **just added or edited** stays editable for **60 seconds**
+  even if it locked the site, so a fumbled hour isn't a multi-hour lockout.
+- Usage **resets automatically at local midnight**.
 
 ## Load it
 
@@ -31,9 +42,9 @@ for distraction sites, then locks them once you've spent it — until tomorrow.
 3. Click **Load unpacked** and select this `focus-guard/` folder.
 4. Pin the extension, click it, set a daily limit, and add your sites.
 
-To test quickly: set the daily limit to `0.1` min (6 s), then actively scroll a
-distraction site — the lock should appear within seconds. (Reset by bumping the
-limit back up, or wait for local midnight.)
+To test quickly: add a site, open its ⚙ and set its daily budget to `0.1` min
+(6 s), then actively scroll it — the block page should appear within seconds.
+Set "After limit" to "block for 1 min" to watch it unlock again.
 
 ## Files
 
@@ -41,8 +52,10 @@ limit back up, or wait for local midnight.)
 - `background.js` — timing accountant + navigation guard (redirects to the
   blocked page when locked).
 - `content.js` — engagement detection and time reporting.
-- `shared.js` — small helpers (`todayKey()`, `fmtClock()`) shared by
-  background.js/content.js/dashboard.js.
+- `shared.js` — the pure per-site evaluation (`matchSite`, `normalizeSite`,
+  `normalizeUsage`, `evaluateSite`, schedule-rule helpers) plus small
+  formatting helpers, shared by background.js / content.js / dashboard.js so
+  the popup, badge and enforcement can never disagree.
 - `time-is-up.html/.js` — the standalone "time's up" page you're redirected to.
 - `dashboard.html/.css/.js` — the popup dashboard.
 - `test/` — Vitest + jsdom test suite (`npm test`); `.github/workflows/test.yml`
@@ -66,8 +79,9 @@ site-aware enforcement outside the browser is planned. See
 
 ## Ideas for next
 
-- Finish wiring the extension to `native-host/` (see its README) so the real
-  lock state — not just the dev-mode simulate toggle — reaches the companion
-  app's overlay.
+- Site-aware enforcement outside the browser: have the companion react only
+  when a tracked site is actually in the foreground (needs foreground-window
+  detection — see issue #8).
+- Reliable in-app updates for the extension, native host and companion
+  (issue #12).
 - Per-site stats and a daily summary.
-- Scheduled auto-start sessions (e.g. every weekday 9–12).
