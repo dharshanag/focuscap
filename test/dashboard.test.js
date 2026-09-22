@@ -201,7 +201,9 @@ describe("dashboard.js", () => {
 
       row("youtube.com").querySelector(".add-rule").click();
       await flush();
-      expect(getStore().focusSites[0].rules).toEqual([{ type: "block", days: [1, 2, 3, 4, 5], start: "09:00", end: "17:00" }]);
+      expect(getStore().focusSites[0].rules).toEqual([
+        { type: "block", days: [1, 2, 3, 4, 5], start: "09:00", end: "17:00", touchedAt: Date.now() }
+      ]);
 
       // While the rule is a block window that isn't active (it's 20:00), the
       // site is unlocked and its editor is live.
@@ -222,8 +224,9 @@ describe("dashboard.js", () => {
       expect(getStore().focusSites[0].rules).toEqual([]);
 
       // Switching a rule to "allow only" at 20:00 immediately locks the site
-      // (outside its window) — that edit itself must persist, and the editor
-      // then freezes, which the anti-bypass test below covers.
+      // (outside its window). The edit persists and the editor freezes —
+      // except the just-changed rule itself, which stays live for its grace
+      // window so a fumble can be undone.
       row("youtube.com").querySelector(".add-rule").click();
       await flush();
       rule = row("youtube.com").querySelector(".rule-row");
@@ -233,7 +236,74 @@ describe("dashboard.js", () => {
       await flush();
       expect(getStore().focusSites[0].rules[0].type).toBe("allow");
       expect(row("youtube.com").classList.contains("locked")).toBe(true);
-      expect(row("youtube.com").querySelector(".rule-type").disabled).toBe(true);
+      expect(row("youtube.com").querySelector(".site-budget").disabled).toBe(true);
+      expect(row("youtube.com").querySelector(".add-rule").disabled).toBe(true);
+      expect(row("youtube.com").querySelector(".rule-type").disabled).toBe(false);
+      expect(row("youtube.com").querySelector(".rule-row").classList.contains("grace")).toBe(true);
+    });
+
+    it("a just-added rule that locked the site can still be removed within 60s (undo a fumble); older rules can't", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 0, 14, 10, 0, 0)); // Wed 10:00 — both rules below are active
+      const { dash, getStore } = await loadDashboard({
+        focusSites: [
+          {
+            domain: "youtube.com",
+            rules: [
+              { type: "block", days: [3], start: "09:00", end: "17:00", touchedAt: Date.now() - 2 * 60_000 }, // old
+              { type: "block", days: [3], start: "09:30", end: "12:00", touchedAt: Date.now() - 10_000 } // just added
+            ]
+          }
+        ],
+        budgetSeconds: 3600
+      });
+      dash.expanded.add("youtube.com");
+      await dash.load();
+      const rows = row("youtube.com").querySelectorAll(".rule-row");
+      expect(row("youtube.com").classList.contains("locked")).toBe(true);
+      expect(rows[0].querySelector(".remove-rule").disabled).toBe(true);
+      expect(rows[1].querySelector(".remove-rule").disabled).toBe(false);
+      expect(row("youtube.com").querySelector(".locked-note").textContent).toMatch(/stays editable/);
+
+      // Old rule: refused even via the API.
+      expect(await dash.updateSite("youtube.com", (s) => ({ ...s, rules: s.rules.slice(1) }), { ruleIndex: 0 })).toBe(false);
+      // Non-rule edits stay refused while locked.
+      expect(await dash.updateSite("youtube.com", (s) => ({ ...s, budgetSeconds: 999 }))).toBe(false);
+
+      rows[1].querySelector(".remove-rule").click();
+      await flush();
+      expect(getStore().focusSites[0].rules).toHaveLength(1);
+      expect(getStore().focusSites[0].rules[0].start).toBe("09:00");
+
+      // Once the grace window passes, the survivor is frozen too.
+      vi.setSystemTime(Date.now() + 61_000);
+      expect(dash.ruleInGrace({ touchedAt: Date.now() - 61_000 })).toBe(false);
+      // A future-dated stamp is not a perpetual grace.
+      expect(dash.ruleInGrace({ touchedAt: Date.now() + 5_000 })).toBe(false);
+    });
+
+    it("editing a rule that is still in grace refreshes its stamp (you keep only the rule you're actively fixing)", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 0, 14, 10, 0, 0)); // Wed 10:00, rule below is active -> site locked
+      const { dash, getStore } = await loadDashboard({
+        focusSites: [{ domain: "youtube.com", rules: [{ type: "block", days: [3], start: "09:00", end: "17:00", touchedAt: Date.now() - 50_000 }] }],
+        budgetSeconds: 3600
+      });
+      dash.expanded.add("youtube.com");
+      await dash.load();
+      expect(row("youtube.com").classList.contains("locked")).toBe(true);
+      const end = row("youtube.com").querySelector(".rule-end");
+      expect(end.disabled).toBe(false);
+      end.value = "11:00";
+      end.dispatchEvent(new Event("change"));
+      await flush();
+      const saved = getStore().focusSites[0].rules[0];
+      expect(saved.end).toBe("11:00");
+      expect(saved.touchedAt).toBe(Date.now()); // refreshed from 50s-old
+      // 55s after the ORIGINAL stamp it would have expired; after the refresh it's still live.
+      vi.setSystemTime(Date.now() + 15_000);
+      await dash.load();
+      expect(row("youtube.com").querySelector(".rule-row").classList.contains("grace")).toBe(true);
     });
 
     it("updateSite() refuses to change a locked site (anti-bypass), re-checking live state", async () => {

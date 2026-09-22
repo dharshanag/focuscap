@@ -64,7 +64,20 @@ function describeStatus(status) {
 // Which site editors are open, by domain — survives re-renders.
 const expanded = new Set();
 
-const DEFAULT_RULE = () => ({ type: "block", days: [1, 2, 3, 4, 5], start: "09:00", end: "17:00" });
+// A rule you just added or edited can still be changed or removed for this
+// long, even if it locked the site — anti-bypass shouldn't turn a fumble
+// (wrong hour, wrong day) into a multi-hour lockout. Anything older is
+// frozen while the site is locked, like every other setting.
+const RULE_GRACE_MS = 60 * 1000;
+function ruleInGrace(rule, now = Date.now()) {
+  if (!rule || typeof rule.touchedAt !== "number") return false;
+  const age = now - rule.touchedAt;
+  // A future-dated stamp (clock skew, hand-edited storage) must not be a
+  // perpetual grace.
+  return age >= 0 && age < RULE_GRACE_MS;
+}
+
+const DEFAULT_RULE = () => ({ type: "block", days: [1, 2, 3, 4, 5], start: "09:00", end: "17:00", touchedAt: Date.now() });
 const DAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -195,7 +208,10 @@ function buildEditor(site, status) {
   if (locked) {
     const note = document.createElement("div");
     note.className = "locked-note";
-    note.textContent = "Locked — settings can't be changed until it unlocks.";
+    const anyGrace = site.rules.some((r) => ruleInGrace(r));
+    note.textContent = anyGrace
+      ? "Locked — settings can't be changed until it unlocks. A rule you just changed stays editable for a minute."
+      : "Locked — settings can't be changed until it unlocks.";
     box.appendChild(note);
   }
 
@@ -289,15 +305,22 @@ function buildEditor(site, status) {
   return box;
 }
 
-function buildRuleRow(rule, siteKey, ruleIndex, locked) {
+function buildRuleRow(rule, siteKey, ruleIndex, siteLocked) {
   const row = document.createElement("div");
   row.className = "rule-row";
+  // This row stays live while the site is locked only during its grace window.
+  const locked = siteLocked && !ruleInGrace(rule);
+  if (siteLocked && !locked) row.classList.add("grace");
 
   const patchRule = (patch) =>
-    updateSite(siteKey, (s) => ({
-      ...s,
-      rules: s.rules.map((r, i) => (i === ruleIndex ? { ...r, ...patch } : r))
-    }));
+    updateSite(
+      siteKey,
+      (s) => ({
+        ...s,
+        rules: s.rules.map((r, i) => (i === ruleIndex ? { ...r, ...patch, touchedAt: Date.now() } : r))
+      }),
+      { ruleIndex }
+    );
 
   const type = document.createElement("select");
   type.className = "rule-type";
@@ -337,7 +360,7 @@ function buildRuleRow(rule, siteKey, ruleIndex, locked) {
   removeRule.title = "Remove rule";
   removeRule.disabled = locked;
   removeRule.addEventListener("click", () =>
-    updateSite(siteKey, (s) => ({ ...s, rules: s.rules.filter((_, i) => i !== ruleIndex) }))
+    updateSite(siteKey, (s) => ({ ...s, rules: s.rules.filter((_, i) => i !== ruleIndex) }), { ruleIndex })
   );
 
   const times = document.createElement("div");
@@ -362,13 +385,21 @@ function buildRuleRow(rule, siteKey, ruleIndex, locked) {
 
 // Apply `mutate` to the stored site with this `domain` and persist. Refuses
 // while the site is locked (re-checked against live state, not the rendered
-// snapshot) or if the site no longer exists.
-async function updateSite(domain, mutate) {
+// snapshot) or if the site no longer exists. The one exception: an edit or
+// removal of a rule that is still inside its grace window (opts.ruleIndex).
+async function updateSite(domain, mutate, opts = {}) {
   const { store, statuses, sites } = await readModel();
   const index = sites.findIndex((s) => s.domain === domain);
-  if (index === -1 || statuses[index].locked) {
+  if (index === -1) {
     load();
     return false;
+  }
+  if (statuses[index].locked) {
+    const rule = typeof opts.ruleIndex === "number" ? sites[index].rules[opts.ruleIndex] : null;
+    if (!ruleInGrace(rule)) {
+      load();
+      return false;
+    }
   }
   const raw = (store.focusSites || []).slice();
   raw[index] = normalizeSite(mutate(sites[index]));
@@ -435,6 +466,8 @@ if (typeof module !== "undefined" && module.exports) {
     usedMsToday,
     describeStatus,
     fmtUntil,
+    ruleInGrace,
+    RULE_GRACE_MS,
     saveSettings,
     saveBudget,
     addSite,

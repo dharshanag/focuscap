@@ -181,6 +181,8 @@ button[type="submit"], .add-form button {
   border-radius: 6px;
 }
 .rule-row .times { display: flex; align-items: center; gap: 4px; grid-column: 1 / -1; }
+/* A just-changed rule that's still editable while the site is locked. */
+.rule-row.grace { outline: 1px dashed var(--accent-dim); }
 .days { display: flex; gap: 2px; }
 .day-toggle {
   width: 22px; height: 22px; padding: 0;
