@@ -170,3 +170,10 @@ input[type="time"] { font-variant-numeric: tabular-nums; }
 }
 .row-remove:hover { color: var(--danger); }
 .blackout-days { display: flex; gap: 4px; flex-wrap: wrap; width: 100%; margin-top: 4px; }
+
+/* advanced */
+.check-row { display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 500; }
+.check-row input { width: 16px; height: 16px; }
+.field-row.disabled { opacity: 0.45; pointer-events: none; }
+.save-row { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+.saved-msg { color: var(--green); font-size: 13px; font-weight: 600; }

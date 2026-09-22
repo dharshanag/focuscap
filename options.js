@@ -68,7 +68,21 @@ function render() {
   renderSites();
   renderBudget();
   renderSchedule();
-  el("idleInput").value = (store.settings || { idleSeconds: 45 }).idleSeconds;
+  renderAdvanced();
+}
+
+function renderAdvanced() {
+  const s = store.settings || {};
+  const enabled = s.idleEnabled !== false; // default on (back-compat with older data)
+  el("idleEnabled").checked = enabled;
+  el("idleInput").value = s.idleSeconds ?? 45;
+  reflectIdleEnabled(enabled);
+}
+
+// Enable/disable the seconds field to match the checkbox (visual only until Save).
+function reflectIdleEnabled(enabled) {
+  el("idleSecondsRow").classList.toggle("disabled", !enabled);
+  el("idleInput").disabled = !enabled;
 }
 
 // --- Onboarding --------------------------------------------------------------
@@ -328,9 +342,14 @@ function removeBlackout(i) {
   persist({ schedule: s });
 }
 
-async function saveIdle() {
+async function saveAdvanced() {
+  const idleEnabled = el("idleEnabled").checked;
   const idleSeconds = Math.max(5, parseInt(el("idleInput").value, 10) || 45);
-  await persist({ settings: { idleSeconds } });
+  await persist({ settings: { idleEnabled, idleSeconds } });
+  const msg = el("advancedSaved");
+  msg.hidden = false;
+  clearTimeout(saveAdvanced._t);
+  saveAdvanced._t = setTimeout(() => { msg.hidden = true; }, 2000);
 }
 
 // --- Wire up -----------------------------------------------------------------
@@ -338,7 +357,8 @@ async function saveIdle() {
 el("addForm").addEventListener("submit", addSite);
 el("budgetHours").addEventListener("change", saveBudget);
 el("budgetMinutes").addEventListener("change", saveBudget);
-el("idleInput").addEventListener("change", saveIdle);
+el("idleEnabled").addEventListener("change", (e) => reflectIdleEnabled(e.target.checked));
+el("saveAdvanced").addEventListener("click", saveAdvanced);
 el("schedEnabled").addEventListener("change", (e) =>
   persist({ schedule: { ...schedule(), enabled: e.target.checked } })
 );
@@ -364,7 +384,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     renderBudget();
     renderSites(); // the removal lock can flip as you near the limit
   } else if (changes.settings) {
-    el("idleInput").value = (store.settings || { idleSeconds: 45 }).idleSeconds;
+    renderAdvanced();
   }
 });
 

@@ -9,7 +9,7 @@
   let running = false;
   let loop = null;
   let lastInputAt = Date.now();
-  let settings = { idleSeconds: 45 };
+  let settings = { idleEnabled: true, idleSeconds: 45 };
   let badgeHost = null;
   let badgeEl = null;
 
@@ -30,6 +30,9 @@
     // Must be the foreground, visible tab. (A backgrounded music tab is hidden
     // → never counts. That case still holds.)
     if (document.visibilityState !== "visible") return false;
+    // Idle-pausing can be turned off in the dashboard — then all foreground
+    // time counts. (Treat missing value as "on" for older stored settings.)
+    if (settings.idleEnabled === false) return true;
     // Recent interaction counts — even if a browser popup/menu (or the Focus Cap
     // popup) briefly stole keyboard focus. We deliberately do NOT require
     // document.hasFocus() here, so opening the extensions menu won't pause you.

@@ -7,7 +7,7 @@ importScripts("schedule.js"); // scheduleStateAt() + time helpers
 
 const DEFAULTS = {
   focusSites: [],
-  settings: { idleSeconds: 45 },
+  settings: { idleEnabled: true, idleSeconds: 45 },
   budgetSeconds: 1800, // daily distraction allowance (default 30 min)
   usage: { date: "", totalMs: 0 }, // budget usage today: { date, totalMs }
   stats: {}, // per-day, per-domain active time: { "YYYY-MM-DD": { domain: ms } }
