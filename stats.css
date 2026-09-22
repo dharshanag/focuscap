@@ -9,6 +9,22 @@
   --distraction: #f87171;
   --productive: #34d399;
   --neutral: #7a7a90;
+  --edge: rgba(255,255,255,0.08);
+  --hover: rgba(255,255,255,0.14);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f4f7;
+  --panel: #ffffff;
+  --panel-2: #ececf1;
+  --text: #1b1b26;
+  --muted: #63637a;
+  --accent: #7c3aed;
+  --distraction: #dc2626;
+  --productive: #059669;
+  --neutral: #6b6b80;
+  --edge: rgba(0,0,0,0.10);
+  --hover: rgba(0,0,0,0.06);
 }
 
 * { box-sizing: border-box; }
@@ -25,6 +41,12 @@ body {
 .head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 24px; }
 h1 { font-size: 26px; margin: 0; letter-spacing: -0.4px; }
 .today { color: var(--muted); font-size: 14px; }
+.head-right { display: flex; align-items: center; gap: 12px; }
+.theme-toggle {
+  background: var(--edge); border: 1px solid var(--edge); color: var(--text);
+  border-radius: 9px; cursor: pointer; font-size: 15px; line-height: 1; padding: 6px 10px;
+}
+.theme-toggle:hover { background: var(--hover); }
 
 h2 {
   font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px;
@@ -33,7 +55,7 @@ h2 {
 
 /* Summary tiles */
 .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-.tile { background: var(--panel); border-radius: 12px; padding: 16px; border: 1px solid rgba(255,255,255,0.06); }
+.tile { background: var(--panel); border-radius: 12px; padding: 16px; border: 1px solid var(--edge); }
 .tile-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
 .tile-value { font-size: 28px; font-weight: 800; margin-top: 6px; font-variant-numeric: tabular-nums; }
 .tile.distraction .tile-value { color: var(--distraction); }
@@ -73,9 +95,9 @@ h2 {
 }
 .chip.distraction { background: rgba(248,113,113,0.18); color: var(--distraction); }
 .chip.productive { background: rgba(52,211,153,0.18); color: var(--productive); }
-.chip.neutral { background: rgba(255,255,255,0.08); color: var(--neutral); }
+.chip.neutral { background: var(--edge); color: var(--neutral); }
 .chip.blocked { background: rgba(167,139,250,0.18); color: var(--accent); }
-.meter { height: 5px; background: rgba(255,255,255,0.07); border-radius: 999px; margin-top: 8px; overflow: hidden; }
+.meter { height: 5px; background: var(--edge); border-radius: 999px; margin-top: 8px; overflow: hidden; }
 .meter-fill { height: 100%; border-radius: 999px; background: var(--neutral); }
 .meter-fill.distraction { background: var(--distraction); }
 .meter-fill.productive { background: var(--productive); }

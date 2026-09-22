@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --bg: #14141f;
   --panel: #1e1e2e;
   --text: #e7e7f0;
@@ -7,6 +8,21 @@
   --accent-dim: #6d5bb5;
   --danger: #f87171;
   --green: #34d399;
+  --edge: rgba(255,255,255,0.09);
+  --hover: rgba(255,255,255,0.14);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f4f7;
+  --panel: #ffffff;
+  --text: #1b1b26;
+  --muted: #63637a;
+  --accent: #7c3aed;
+  --accent-dim: #8b5cf6;
+  --danger: #dc2626;
+  --green: #059669;
+  --edge: rgba(0,0,0,0.10);
+  --hover: rgba(0,0,0,0.06);
 }
 
 * { box-sizing: border-box; }
@@ -38,13 +54,20 @@ h2 {
   margin: 18px 0 8px;
 }
 
+.header-right { display: flex; align-items: center; gap: 8px; }
+.theme-toggle {
+  background: var(--edge); border: 1px solid var(--edge); color: var(--text);
+  border-radius: 8px; cursor: pointer; font-size: 14px; line-height: 1; padding: 4px 7px;
+}
+.theme-toggle:hover { background: var(--hover); }
+
 .pill {
   font-size: 11px;
   font-weight: 600;
   padding: 4px 10px;
   border-radius: 999px;
 }
-.pill.off { background: rgba(255,255,255,0.08); color: var(--muted); }
+.pill.off { background: var(--edge); color: var(--muted); }
 .pill.on { background: rgba(52,211,153,0.18); color: var(--green); font-variant-numeric: tabular-nums; }
 .pill.locked { background: rgba(248,113,113,0.18); color: var(--danger); }
 
@@ -74,7 +97,7 @@ h2 {
 
 .bar {
   height: 6px;
-  background: rgba(255,255,255,0.08);
+  background: var(--edge);
   border-radius: 999px;
   overflow: hidden;
   margin: 10px 0 2px;
@@ -120,7 +143,7 @@ h2 {
 
 input {
   background: var(--panel);
-  border: 1px solid rgba(255,255,255,0.08);
+  border: 1px solid var(--edge);
   color: var(--text);
   border-radius: 8px;
   padding: 8px;
@@ -143,11 +166,11 @@ button[type="submit"], .add-form button {
   font-weight: 600;
   color: var(--text);
   background: var(--panel);
-  border: 1px solid rgba(255,255,255,0.08);
+  border: 1px solid var(--edge);
   border-radius: 10px;
   cursor: pointer;
 }
-.stats-btn:hover { border-color: var(--accent-dim); color: #fff; }
+.stats-btn:hover { border-color: var(--accent-dim); color: var(--accent); }
 
 .settings label {
   display: flex;
