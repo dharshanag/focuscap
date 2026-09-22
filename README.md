@@ -39,8 +39,10 @@ site once its rules say so.
 
 1. Open `chrome://extensions` (or `edge://extensions`).
 2. Toggle **Developer mode** on.
-3. Click **Load unpacked** and select this `focus-guard/` folder.
-4. Pin the extension, click it, set a daily limit, and add your sites.
+3. Click **Load unpacked** and select this repo folder.
+4. Pin the extension, click it, add your sites, then open each site's ⚙ to
+   set its budget, cool-down and schedule (and adjust the total cap if you
+   like).
 
 To test quickly: add a site, open its ⚙ and set its daily budget to `0.1` min
 (6 s), then actively scroll it — the block page should appear within seconds.
@@ -48,34 +50,50 @@ Set "After limit" to "block for 1 min" to watch it unlock again.
 
 ## Files
 
-- `manifest.json` — MV3 config.
-- `background.js` — timing accountant + navigation guard (redirects to the
-  blocked page when locked).
-- `content.js` — engagement detection and time reporting.
+- `manifest.json` — MV3 config (the `"key"` pins a stable extension ID so the
+  native host's `allowed_origins` keeps working across reloads).
+- `background.js` — per-site timing accountant + navigation guard (redirects
+  to the block page when a site's rules lock it); pushes lock state to the
+  native host and arms `chrome.alarms` for midnight and each unlock time.
+- `content.js` — engagement detection, heartbeats, and the in-page badge.
 - `shared.js` — the pure per-site evaluation (`matchSite`, `normalizeSite`,
   `normalizeUsage`, `evaluateSite`, schedule-rule helpers) plus small
   formatting helpers, shared by background.js / content.js / dashboard.js so
   the popup, badge and enforcement can never disagree.
-- `time-is-up.html/.js` — the standalone "time's up" page you're redirected to.
-- `dashboard.html/.css/.js` — the popup dashboard.
+- `time-is-up.html/.js` — the standalone block page you're redirected to; it
+  says why the site is locked and counts down to the actual unlock.
+- `dashboard.html/.css/.js` — the popup: total cap, per-site rows and the ⚙
+  per-site editor.
 - `test/` — Vitest + jsdom test suite (`npm test`); `.github/workflows/test.yml`
   runs it in CI.
 - `companion/` — a desktop menubar app (Electron) that shows a small,
-  non-blocking, always-on-top corner pill at the OS level once a tracked
-  site is out of time — the extension alone is only visible inside the
-  browser. See its README.
+  non-blocking, always-on-top corner pill at the OS level listing which
+  tracked sites are locked and until when — the extension alone is only
+  visible inside the browser. See its README.
 - `native-host/` — the Chrome Native Messaging host that bridges the
-  extension to `companion/`. Not wired up to the extension's UI yet; see its
-  README for setup and current status.
+  extension to `companion/`; wired end to end once registered with the
+  per-OS install scripts (see its README).
+- `state-store.js` — the small `~/.focuscap/state.json` file the native host
+  writes and the companion polls.
 
 ## Desktop companion (optional)
 
 The extension's lock is browser-only by design — it can't see what you do in
 a different browser or app. `companion/` adds an OS-level, non-blocking
 corner pill for that, fed by `native-host/` over Chrome's Native Messaging
-API. The full chain (extension → native host → companion) works end to end;
-site-aware enforcement outside the browser is planned. See
-`companion/README.md` and `native-host/README.md`.
+API. The full chain (extension → native host → companion) works end to end
+once the host is registered; site-aware enforcement outside the browser is
+planned. See `companion/README.md` and `native-host/README.md`.
+
+## Known gaps
+
+Tracked as GitHub issues so they aren't lost: the per-site heartbeat path and
+the companion pill's rendering haven't been re-verified end to end in a headed
+browser since the per-site rewrite (#13); `install-windows.ps1` registers only
+stable Chrome and has never been run (#14); "unblocks at" times can be off by
+an hour across DST or wrong for adjacent windows (#15); storage has no schema
+version yet (#16); sub-minute cool-downs may be reported late in a packed
+build (#17); low-severity hardening from two security reviews (#9, #10, #18).
 
 ## Ideas for next
 
