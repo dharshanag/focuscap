@@ -87,9 +87,10 @@ planned. See `companion/README.md` and `native-host/README.md`.
 
 ## Known gaps
 
-Tracked as GitHub issues so they aren't lost: the per-site heartbeat path and
-the companion pill's rendering haven't been re-verified end to end in a headed
-browser since the per-site rewrite (#13); `install-windows.ps1` registers only
+Tracked as GitHub issues so they aren't lost: the companion pill's
+click-through / never-takes-focus behaviour is asserted from Electron flags,
+not observed (#13, closed — the heartbeat path and the pill's rendered text
+are now verified); `install-windows.ps1` registers only
 stable Chrome and has never been run (#14); "unblocks at" times can be off by
 an hour across DST or wrong for adjacent windows (#15); storage has no schema
 version yet (#16); sub-minute cool-downs may be reported late in a packed

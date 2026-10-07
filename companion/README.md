@@ -47,13 +47,13 @@ being browsed.
 ## Status
 
 The pill, tray plumbing, and extension → native-host → state file → pill
-chain work end to end: verified in a real browser, including a real
-`chrome.alarms` unlock making the pill disappear. Two honest caveats,
-tracked in GitHub issue #13: the pill's *rendered text* has been checked by
-unit tests and a Node-level render, not by looking at the live window, and
-its click-through / never-takes-focus behaviour comes from Electron flags
-(`focusable: false`, `setIgnoreMouseEvents(true)`) rather than observation.
-`main.js` itself has no automated tests.
+chain work end to end: verified in a real, focused browser through the
+heartbeat path, including a real `chrome.alarms` unlock making the pill
+disappear, and the pill's rendered text/layout checked by rendering
+`pill.html` with a stubbed multi-site state (see GitHub issue #13). One
+honest caveat: its click-through / never-takes-focus behaviour comes from
+Electron flags (`focusable: false`, `setIgnoreMouseEvents(true)`) rather
+than observation. `main.js` itself has no automated tests.
 
 Still to come: site-aware enforcement — reacting only when a tracked site is
 actually in the foreground — which needs foreground-window detection (GitHub
