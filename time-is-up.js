@@ -31,5 +31,25 @@ function tickCountdown() {
   el.textContent = `${h}h ${pad(m)}m ${pad(s)}s`;
 }
 
+const messages = ["You're doing amazing; Keep going!", "Keep at it, and you'll be amazed at how far you've come.",
+   "Back to the grind — you've got this.", 
+   "You're doing so good, you got this!", 
+   "The more you work now, the less you'll stress later.",
+    "You know this isn't what you're supposed to be doing right now. You're doing great.", 
+    "Lock in! You're doing awesome."];
+const randomIndex = Math.floor(Math.random()*messages.length);
+const randomMessage = messages[randomIndex];
+
+const today = new Date().toDateString();
+let blockViews = Number(localStorage.getItem("views") || 0);
+if (localStorage.getItem("viewsDay") !== today) {
+  blockViews = 0; // new day — the first block of the day shows no message
+}
+if (blockViews >= 1) {
+  document.getElementById("encouragement").textContent = randomMessage;
+}
+localStorage.setItem("views", blockViews + 1);
+localStorage.setItem("viewsDay", today);
+
 tickCountdown();
 setInterval(tickCountdown, 1000);
