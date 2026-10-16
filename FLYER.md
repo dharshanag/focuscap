@@ -134,8 +134,8 @@ for setup.
 | **Cost** | Free. Open source. |
 | **Accounts** | None. |
 | **Data collected** | None sent anywhere. Locally: a 14-day log of time per site plus your settings, in the browser's extension storage. |
-| **Permissions** | Storage (your settings), navigation (to block before load), alarms (midnight reset and unlock timers), native messaging (companion, optional). |
-| **Tested** | 329 automated tests in CI, plus end-to-end runs in a real browser through the native host to the companion. |
+| **Permissions** | Access to every page (`<all_urls>`, for the small script that measures engaged time — the basis of the per-site log), storage (your settings), navigation (to block before load), alarms (midnight reset and unlock timers), native messaging (companion, optional). |
+| **Tested** | 300+ automated tests in CI, plus end-to-end runs in a real browser through the native host to the companion. |
 
 ---
 
@@ -183,9 +183,9 @@ Every site gets its own rules, edited from its ⚙ on the Dashboard:
    limit, then tune each site's budget, cool-down and schedule from the ⚙
    next to it. Pin Focus Cap for the popup.
 
-Want to feel it work right away? Set a site's budget to `0.1` minutes (six
-seconds) with a one-minute cool-down, open it, and scroll. Meet the wall —
-then watch it lift.
+Want to feel it work right away? Set a site's budget to `0.5` minutes
+(thirty seconds) with a one-minute cool-down, open it, and scroll. Meet the
+wall — then watch it lift.
 
 ---
 

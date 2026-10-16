@@ -91,8 +91,9 @@ rules say so. Everything is enforced locally and nothing leaves your device.
   countdown to the actual unlock; a stale tab left open past the unlock reads
   "You can go back now." From the second block of the day onwards it adds a
   short encouraging message. It doesn't just cover the site, it replaces it.
-- **Light/dark theme** toggle (☀️/🌙) on the popup, Dashboard, stats and
-  block pages; the choice is stored locally and follows the OS until you pick.
+- **Light/dark theme** toggle (☀️/🌙) on the popup, Dashboard and stats
+  pages; the block page has no toggle but follows the same theme. The choice
+  is stored locally and follows the OS until you pick.
 - Toolbar/extension **icons** at 16/32/48/128 px (`icons/`).
 
 ### No bypass
@@ -106,11 +107,14 @@ rules say so. Everything is enforced locally and nothing leaves your device.
 
 ## Privacy
 
-- Everything is stored in `chrome.storage.local` on this device: your site
-  list and rules, the daily limit, the schedule, settings, today's usage, and
-  a **14-day local log of engaged time per domain for every site you visit**
-  (`stats`, keyed by day, oldest days pruned automatically). That log is what
-  the stats page reads; it is never uploaded, synced or sent anywhere.
+- Everything is kept in the browser's extension storage on this device —
+  `chrome.storage.local` for your site list and rules, the daily limit, the
+  schedule, settings, today's usage, and a **14-day local log of engaged time
+  per domain for every site you visit** (`stats`, keyed by day, oldest days
+  pruned automatically); plus two small items in the extension pages' own
+  `localStorage` (the theme cache and the block page's daily view counter).
+  The log is what the stats page reads; it is never uploaded, synced or sent
+  anywhere.
 - There is no account, no server, no telemetry. The extension makes no
   network requests of its own. The optional desktop companion reads a local
   file (`~/.focuscap/state.json`) written by the local native host — also
@@ -129,9 +133,9 @@ rules say so. Everything is enforced locally and nothing leaves your device.
    budget, cool-down and schedule (and adjust the daily limit if you like).
 
 To test quickly: add a site, open its ⚙ on the Dashboard and set its daily
-budget to `0.1` min (6 s), then actively scroll it — the block page should
-appear within seconds. Set "After limit" to "block for 1 min" to watch it
-unlock again.
+budget to `0.5` min (30 s — the smallest value the field's 0.5-min step
+accepts), then actively scroll it — the block page should appear within half
+a minute. Set "After limit" to "block for 1 min" to watch it unlock again.
 
 ## Files
 
@@ -210,9 +214,18 @@ version yet (#16); sub-minute cool-downs may be reported late in a packed
 build (#17); low-severity hardening from two security reviews (#9, #10, #18).
 Not yet filed: a scheduled blackout or enforcement-window *start* doesn't
 proactively redirect already-open tabs or push a companion snapshot — the
-next heartbeat or navigation handles it; the per-site editor's cool-down is
-whole minutes only (1 min minimum), and its budget field displays to one
-decimal, so a sub-minute test budget like 3 s shows as `0.1`.
+next heartbeat or navigation handles it; likewise, when a site becomes free
+because an enforcement window *ended* (rather than through a cool-down or
+unlock alarm), the companion snapshot's `lastBlocked` isn't cleared until
+the next unlock alarm or midnight, so the pill can show a stale "last
+blocked" (`sites[domain].locked` is correct throughout). Two UI-only limits
+of the per-site editor: its cool-down field takes whole minutes (minimum 1)
+and its budget field steps by 0.5 min — storage itself accepts any integer
+`lockoutSeconds` / `budgetSeconds`, so a sub-minute budget such as 3 s can
+be typed (`0.05`) and is stored exactly, but the field flags it as out of
+step and displays it to one decimal (`0.1`). The native host's
+`~/.focuscap/state.json` is one file per OS user, so run the extension in
+one browser profile at a time (see `native-host/README.md`).
 
 ## Ideas for next
 

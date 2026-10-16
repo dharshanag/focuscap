@@ -65,7 +65,8 @@ on each `connectNative()` call, so no restart is needed.
 `background.js` requests the `nativeMessaging` permission and best-effort
 posts a **per-site lock snapshot** via
 `chrome.runtime.connectNative("com.focuscap.host")` whenever state changes —
-on every heartbeat, on a navigation-time block, at the midnight reset, and
+when a page's content script reports it has become engaged ("entering"), on
+every heartbeat, on a navigation-time block, at the midnight reset, and
 when a per-site `unlock:<domain>` alarm fires at the end of a cool-down,
 per-site schedule rule or global blackout (see `notifyNativeHost()` /
 `snapshotForHost()`). The payload is `{ locked, sites: { [domain]: { locked, reason, until, remainingMs } },
@@ -74,6 +75,17 @@ known, correctly-typed fields. Once registered per the steps above, that's
 the whole extension→host leg — no extension code changes needed. Verify
 with the manual test below, or by watching `~/.focuscap/state.json` update
 while browsing a tracked site with the extension loaded.
+
+**One browser profile at a time.** The host manifest and
+`~/.focuscap/state.json` are per OS user, not per browser profile. Two
+browsers running the extension at once (your everyday Chrome plus a test
+`--user-data-dir`, or two automation sessions) each spawn their own `host.js`,
+and both read-modify-write the same `state.json` — so the file, and the
+companion pill reading it, flap between the two extensions' views of the
+lock state. Each write merges one sanitized patch into the file (last writer
+wins; a reader that catches a half-written file falls back to defaults), so
+nothing is permanently corrupted — but "the" lock state is only meaningful
+while one profile is running.
 
 Known gaps: the `focusSites` field is passed through unsanitized (nothing
 reads it yet — GitHub issue #18), and error replies may include the local
