@@ -123,18 +123,23 @@ if (typeof document !== "undefined" && document.getElementById("countdown")) {
     document.getElementById("resetLabel").textContent = info.resetLabel;
     document.title = `${domain} — ${info.heading.toLowerCase()}`;
 
+    // Renders the countdown; returns true once the lock has expired.
     const tick = () => {
       const left = info.until - Date.now();
       if (left <= 0) {
-        // Stale tab left open past the unlock: don't show a negative timer.
-        document.getElementById("resetLabel").textContent = "";
-        document.getElementById("countdown").textContent = "You can go back now.";
-        return;
+        // Stale tab left open past the unlock: replace the whole line (label,
+        // separator and timer) with one sentence rather than a negative timer.
+        document.getElementById("resetLine").textContent = "You can go back now.";
+        return true;
       }
       document.getElementById("resetLabel").textContent = info.resetLabel;
       document.getElementById("countdown").textContent = fmtCountdown(left);
+      return false;
     };
-    tick();
-    setInterval(tick, 1000);
+    if (!tick()) {
+      const timer = setInterval(() => {
+        if (tick()) clearInterval(timer);
+      }, 1000);
+    }
   });
 }

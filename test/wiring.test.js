@@ -260,6 +260,8 @@ describe("light-theme CSS overrides", () => {
     expect(doc.getElementById("countdown").closest("#resetLine")).not.toBeNull();
     expect(doc.getElementById("domain").closest("#message")).not.toBeNull();
     expect(doc.getElementById("encouragement").textContent).toBe("");
+    // An empty encouragement line (first view of the day) takes no space.
+    expect(read("time-is-up.html")).toMatch(/#encouragement:empty\s*\{\s*display:\s*none;?\s*\}/);
     // time-is-up.js runs after the DOM exists: it's the last thing in <body>.
     const scripts = [...doc.querySelectorAll("body script")].map((s) => s.getAttribute("src"));
     expect(scripts).toEqual(["time-is-up.js"]);

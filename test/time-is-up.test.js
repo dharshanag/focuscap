@@ -30,7 +30,10 @@ const text = (id) => document.getElementById(id).textContent;
 describe("time-is-up.js", () => {
   beforeEach(() => {
     localStorage.clear();
-    vi.useFakeTimers({ toFake: ["Date"] });
+    // Fake the clock and the page's 1-second interval (not setTimeout: flush()
+    // relies on it). Faking setInterval also stops a page's ticker from
+    // outliving its test and scribbling on a later test's DOM.
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     vi.setSystemTime(new Date(2026, 0, 14, 12, 0, 0));
   });
 
@@ -130,9 +133,35 @@ describe("time-is-up.js", () => {
 
     it("a tab left open past the unlock time shows a plain 'go back' instead of a negative countdown", async () => {
       await loadPage({ lastBlocked: "youtube.com", lastBlockedReason: "lockout", lastBlockedUntil: at(11) });
-      expect(text("resetLabel")).toBe("");
-      expect(text("countdown")).toBe("You can go back now.");
-      expect(text("resetLine").trim()).toBe("You can go back now.");
+      // The whole line is one sentence: no leftover label, separator or timer.
+      expect(text("resetLine")).toBe("You can go back now.");
+      expect(document.getElementById("resetLine").childNodes).toHaveLength(1);
+      // Nothing left to count down, so no ticker is started.
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("the countdown ticks down every second while the page is open", async () => {
+      await loadPage({ lastBlocked: "youtube.com", lastBlockedReason: "lockout", lastBlockedUntil: at(13, 30) });
+      expect(text("countdown")).toBe("1h 30m 00s");
+      vi.advanceTimersByTime(1000);
+      expect(text("countdown")).toBe("1h 29m 59s");
+      vi.advanceTimersByTime(59_000);
+      expect(text("countdown")).toBe("1h 29m 00s");
+      expect(text("resetLine")).toBe("Back in 1h 29m 00s");
+    });
+
+    it("when the countdown reaches zero the line flips to 'go back' and the ticker stops", async () => {
+      await loadPage({ lastBlocked: "youtube.com", lastBlockedReason: "lockout", lastBlockedUntil: at(12, 0, 0) + 2000 });
+      expect(text("resetLine")).toBe("Back in 0m 02s");
+      expect(vi.getTimerCount()).toBe(1);
+      vi.advanceTimersByTime(1000);
+      expect(text("resetLine")).toBe("Back in 0m 01s");
+      vi.advanceTimersByTime(1000);
+      expect(text("resetLine")).toBe("You can go back now.");
+      expect(vi.getTimerCount()).toBe(0);
+      // A further second passing changes nothing (and throws nothing).
+      vi.advanceTimersByTime(5000);
+      expect(text("resetLine")).toBe("You can go back now.");
     });
   });
 
@@ -200,6 +229,25 @@ describe("time-is-up.js", () => {
       expect(page.MESSAGES).toContain(text("encouragement"));
       expect(localStorage.getItem("views")).toBe("2");
       expect(localStorage.getItem("viewsDay")).toBe(TODAY);
+    });
+
+    it("the page picks its message at random (Math.random), not a fixed one", async () => {
+      const random = vi.spyOn(Math, "random");
+      localStorage.setItem("views", "1");
+      localStorage.setItem("viewsDay", TODAY);
+
+      random.mockReturnValue(6 / 7);
+      let { page } = await loadPage({ lastBlocked: "youtube.com", lastBlockedReason: "budget", lastBlockedUntil: null });
+      expect(text("encouragement")).toBe(page.MESSAGES[6]);
+
+      random.mockReturnValue(0);
+      ({ page } = await loadPage({ lastBlocked: "youtube.com", lastBlockedReason: "budget", lastBlockedUntil: null }));
+      expect(text("encouragement")).toBe(page.MESSAGES[0]);
+
+      random.mockReturnValue(3 / 7);
+      ({ page } = await loadPage({ lastBlocked: "youtube.com", lastBlockedReason: "budget", lastBlockedUntil: null }));
+      expect(text("encouragement")).toBe(page.MESSAGES[3]);
+      random.mockRestore();
     });
 
     it("a new day resets the counter: yesterday's many views don't earn a message today", async () => {
