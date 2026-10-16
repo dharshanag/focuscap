@@ -173,6 +173,22 @@ describe("stats.js", () => {
       expect(chrome.storage.local.set).not.toHaveBeenCalled();
       expect(getStore().focusSites).toEqual([{ domain: "youtube.com" }]);
     });
+
+    it("Block de-duplicates with the same matching rule as enforcement (www./subdomain forms)", async () => {
+      freezeToday();
+      const { stats, getStore, chrome } = await loadStats({
+        focusSites: [{ domain: "www.youtube.com" }, { domain: "reddit.com" }],
+        stats: { [daysAgo(0)]: {} }
+      });
+      chrome.storage.local.set.mockClear();
+      await stats.blockSite("youtube.com"); // already covered by the www. entry
+      await stats.blockSite("old.reddit.com"); // already covered by the parent domain
+      expect(chrome.storage.local.set).not.toHaveBeenCalled();
+      expect(getStore().focusSites).toEqual([{ domain: "www.youtube.com" }, { domain: "reddit.com" }]);
+      // A genuinely new domain still gets added.
+      await stats.blockSite("x.com");
+      expect(getStore().focusSites.map((s) => s.domain)).toEqual(["www.youtube.com", "reddit.com", "x.com"]);
+    });
   });
 
   describe("today's site list", () => {

@@ -38,7 +38,9 @@ function isDistraction(domain, sites) {
 async function blockSite(domain) {
   const { focusSites } = await get(["focusSites"]);
   const sites = Array.isArray(focusSites) ? focusSites : [];
-  if (sites.some((s) => s && s.domain === domain)) return;
+  // Same rule as the Block buttons' visibility: an existing entry that already
+  // covers this domain (bare/www./parent-domain form) means nothing to add.
+  if (isBlocked(domain, sites)) return;
   sites.push(normalizeSite({ domain }));
   await set({ focusSites: sites });
   load();
@@ -239,6 +241,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    // Re-exported so consistency.test.js can prove this page uses shared.js's
+    // day-key helpers rather than a local copy.
+    todayKey,
+    dayKey,
     fmtDur,
     isBlocked,
     isDistraction,

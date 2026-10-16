@@ -111,6 +111,13 @@ describe("stats page wiring", () => {
     }
   });
 
+  it("stats.js defines no local todayKey/dayKey/fmtClock (they come from shared.js)", () => {
+    const src = read("stats.js");
+    for (const name of ["todayKey", "dayKey", "fmtClock"]) {
+      expect(src, `${name} duplicated in stats.js`).not.toMatch(new RegExp(`(function\\s+${name}\\b|\\b(const|let|var)\\s+${name}\\s*=)`));
+    }
+  });
+
   it("dashboard.html has the Daily stats button dashboard.js wires up", () => {
     const btn = parsePage("dashboard.html").getElementById("statsBtn");
     expect(btn).not.toBeNull();

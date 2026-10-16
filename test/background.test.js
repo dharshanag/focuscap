@@ -4,13 +4,21 @@ import { createChromeMock, createControllableStorage, flush, microtasks, stubSha
 // background.js keeps top-level state (e.g. its `chrome` reference is
 // resolved once at import time), so every test gets a fresh module instance
 // wired to its own chrome mock.
+// The stats fallback flush is a real setTimeout when a test isn't faking
+// timers; `loaded` lets afterEach cancel it so an instance armed by one test
+// can never fire into a later test's chrome mock.
+const loaded = [];
 async function loadBackground(initialStorage) {
   vi.resetModules();
   const mock = createChromeMock(initialStorage);
   vi.stubGlobal("chrome", mock.chrome);
   stubSharedGlobals(await import("../shared.js"));
   const bg = await import("../background.js");
+  loaded.push(bg);
   return { bg, ...mock };
+}
+function cancelStatsTimers() {
+  while (loaded.length) loaded.pop().cancelStatsFlushTimer();
 }
 
 function localTodayKey(ms = Date.now()) {
@@ -20,6 +28,7 @@ function localTodayKey(ms = Date.now()) {
 
 describe("background.js", () => {
   afterEach(() => {
+    cancelStatsTimers();
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
@@ -663,6 +672,7 @@ describe("background.js", () => {
 // --- Per-domain daily stats: every page's engaged time, written throttled ---
 describe("background.js per-domain stats", () => {
   afterEach(() => {
+    cancelStatsTimers();
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
@@ -686,7 +696,7 @@ describe("background.js per-domain stats", () => {
 
   it("an untracked page accrues stats per domain and never touches usage", async () => {
     fixedClock();
-    const { bg, chrome, getStore } = await loadBackground({
+    const { bg, chrome, getStore, setStore } = await loadBackground({
       focusSites: [{ domain: "youtube.com" }],
       budgetSeconds: 1800
     });
@@ -697,10 +707,17 @@ describe("background.js per-domain stats", () => {
     expect(res.track).toBe(true);
     expect(res.tracked).toBe(false);
     expect(res.overlay).toBe(false);
+    // Heartbeat replies carry settings too, so an untracked page keeps up
+    // with idle changes made while it's open (content.js only re-reads them
+    // from replies).
+    expect(res.settings).toEqual({ idleEnabled: true, idleSeconds: 45 });
+    setStore({ settings: { idleEnabled: false, idleSeconds: 20 } });
+    const later = await beat(bg, "docs.example.org", 1);
+    expect(later.settings).toEqual({ idleEnabled: false, idleSeconds: 20 });
     await bg.handle({ type: "leaving", hostname: "docs.example.org" });
 
     const store = getStore();
-    expect(store.stats[localTodayKey()]).toEqual({ "docs.example.org": 3000 });
+    expect(store.stats[localTodayKey()]).toEqual({ "docs.example.org": 4000 });
     expect(store.usage).toBeUndefined();
     const usageWrites = chrome.storage.local.set.mock.calls.filter(([obj]) => obj && "usage" in obj);
     expect(usageWrites).toHaveLength(0);
@@ -808,6 +825,138 @@ describe("background.js per-domain stats", () => {
     expect(Object.keys(chrome.storage.local.set.mock.calls[0][0]).sort()).toEqual(["stats", "usage"]);
   });
 
+  it("a tracked site's stats are throttled like everyone else's: usage every beat, stats once per 5s", async () => {
+    fixedClock();
+    const { bg, chrome, getStore } = await loadBackground({ focusSites: [{ domain: "youtube.com" }] });
+    await bg.handle({ type: "entering", hostname: "youtube.com" });
+    chrome.storage.local.set.mockClear();
+    await beat(bg, "youtube.com", 5); // beat 1 flushes (first of the session); 2..5 are within 5s of it
+    const writes = chrome.storage.local.set.mock.calls.map(([obj]) => obj);
+    expect(writes).toHaveLength(5);
+    expect(writes.every((w) => "usage" in w)).toBe(true);
+    expect(writes.filter((w) => "stats" in w)).toHaveLength(1);
+    expect(getStore().usage.sites["youtube.com"].totalMs).toBe(5000);
+    expect(getStore().stats[localTodayKey()]["youtube.com"]).toBe(1000); // 4s still pending
+    await beat(bg, "youtube.com", 1); // 5s after the flush -> everything since lands
+    expect(statsWrites(chrome)).toHaveLength(2);
+    expect(getStore().stats[localTodayKey()]["youtube.com"]).toBe(6000);
+  });
+
+  // The fallback timer's flush is a read-modify-write of `stats`, so it must
+  // wait its turn in handleQueue: if it could run while a heartbeat's own
+  // read-modify-write is in flight, the two could interleave on storage
+  // (the Issue #1 class of bug). Controllable storage makes the interleaving
+  // deterministic: the timer fires while a heartbeat's set() is still
+  // pending, and its get() must not be issued until that set() has landed.
+  it("the fallback flush timer waits behind an in-flight heartbeat (serialized through the handle queue)", async () => {
+    const baseNow = new Date(2026, 9, 16, 12, 0, 0).getTime();
+    const storage = createControllableStorage({ focusSites: [{ domain: "youtube.com" }] });
+    stubSharedGlobals(await import("../shared.js"));
+    vi.stubGlobal("chrome", {
+      storage: { local: { get: storage.get, set: storage.set }, onChanged: { addListener: () => {} } },
+      runtime: {
+        onInstalled: { addListener: () => {} },
+        onStartup: { addListener: () => {} },
+        onMessage: { addListener: () => {} },
+        sendMessage: () => Promise.resolve({}),
+        getURL: (p) => p
+      },
+      tabs: { update: () => Promise.resolve() },
+      webNavigation: { onBeforeNavigate: { addListener: () => {} }, onHistoryStateUpdated: { addListener: () => {} } },
+      alarms: { create: () => {}, onAlarm: { addListener: () => {} } }
+    });
+    vi.resetModules();
+    vi.useFakeTimers();
+    vi.setSystemTime(baseNow);
+    const bg = await import("../background.js");
+    loaded.push(bg);
+
+    // Fully drive one message through controllable storage.
+    async function run(msg, sets) {
+      const p = bg.handle(msg);
+      await microtasks();
+      storage.releaseNextGet();
+      await microtasks();
+      for (let i = 0; i < sets; i++) {
+        storage.releaseNextSet();
+        await microtasks();
+      }
+      return p;
+    }
+    await run({ type: "entering", hostname: "youtube.com" }, 1);
+    vi.setSystemTime(baseNow + 1000);
+    await run({ type: "heartbeat", hostname: "youtube.com" }, 1); // stats flush #1 (1000) + usage
+    vi.setSystemTime(baseNow + 2000);
+    await run({ type: "heartbeat", hostname: "youtube.com" }, 1); // 1000 pending; timer armed for +6s
+    expect(storage.getStore().stats[localTodayKey(baseNow)]["youtube.com"]).toBe(1000);
+
+    // Heartbeat 3: its get() resolves, its set({ usage }) is left hanging.
+    vi.setSystemTime(baseNow + 3000);
+    const p3 = bg.handle({ type: "heartbeat", hostname: "youtube.com" });
+    await microtasks();
+    storage.releaseNextGet();
+    await microtasks();
+    expect(storage.pendingSetCount()).toBe(1);
+    expect(storage.pendingGetCount()).toBe(0);
+
+    // The fallback timer fires now. Serialized: its get() is NOT issued
+    // while heartbeat 3's write is still in flight.
+    await vi.advanceTimersByTimeAsync(4000);
+    await microtasks();
+    expect(storage.pendingGetCount()).toBe(0);
+    expect(storage.pendingSetCount()).toBe(1);
+
+    // Only once heartbeat 3's write lands does the timer's read begin.
+    storage.releaseNextSet();
+    await microtasks();
+    await p3;
+    expect(storage.pendingGetCount()).toBe(1);
+    storage.releaseNextGet();
+    await microtasks();
+    expect(storage.pendingSetCount()).toBe(1);
+    storage.releaseNextSet();
+    await microtasks();
+    expect(storage.pendingGetCount()).toBe(0);
+    expect(storage.pendingSetCount()).toBe(0);
+    expect(storage.getStore().stats[localTodayKey(baseNow)]["youtube.com"]).toBe(3000);
+    expect(storage.getStore().usage.sites["youtube.com"].totalMs).toBe(3000);
+  });
+
+  it("a second tab 'entering' between another tab's heartbeats on the same domain doesn't drop the interval", async () => {
+    fixedClock();
+    const { bg, getStore } = await loadBackground({});
+    await bg.handle({ type: "entering", hostname: "example.com" }); // tab A
+    await beat(bg, "example.com", 1); // A: +1s (1000)
+    vi.setSystemTime(Date.now() + 500);
+    await bg.handle({ type: "entering", hostname: "example.com" }); // tab B, mid-interval
+    vi.setSystemTime(Date.now() + 500);
+    await bg.handle({ type: "heartbeat", hostname: "example.com" }); // A: +2s
+    await bg.handle({ type: "leaving", hostname: "example.com" });
+    // Coverage stays continuous: 2s of wall-clock engagement -> 2000ms, not
+    // 1500 (which is what resetting the clock on B's entering would give).
+    expect(getStore().stats[localTodayKey()]["example.com"]).toBe(2000);
+  });
+
+  it("re-entering a domain after a long gap restarts its clock: the gap is never credited", async () => {
+    fixedClock();
+    const { bg, getStore } = await loadBackground({});
+    await bg.handle({ type: "entering", hostname: "example.com" });
+    await beat(bg, "example.com", 1);
+    await bg.handle({ type: "leaving", hostname: "example.com" });
+    vi.setSystemTime(Date.now() + 60_000); // tab hidden for a minute
+    await bg.handle({ type: "entering", hostname: "example.com" });
+    await beat(bg, "example.com", 1);
+    await bg.handle({ type: "leaving", hostname: "example.com" });
+    // 1000 before + 1000 after; neither the gap nor a capped 5s of it.
+    expect(getStore().stats[localTodayKey()]["example.com"]).toBe(2000);
+    // Just past the live window (no other tab ticking) also restarts cleanly.
+    vi.setSystemTime(Date.now() + bg.TICK_LIVE_MS + 1);
+    await bg.handle({ type: "entering", hostname: "example.com" });
+    await beat(bg, "example.com", 1);
+    await bg.handle({ type: "leaving", hostname: "example.com" });
+    expect(getStore().stats[localTodayKey()]["example.com"]).toBe(3000);
+  });
+
   it("'leaving' flushes whatever is pending immediately", async () => {
     fixedClock();
     const { bg, chrome, getStore } = await loadBackground({});
@@ -856,6 +1005,8 @@ describe("background.js per-domain stats", () => {
     await bg.handle({ type: "entering", hostname: "example.com" });
     await beat(bg, "example.com", 2); // 23:59:58 (written), 23:59:59 (pending)
     vi.setSystemTime(new Date(2026, 9, 17, 0, 0, 1));
+    // The 2s delta straddles midnight; by design it's credited wholly to the
+    // new day rather than split (documented approximation, <= 5s per rollover).
     await bg.handle({ type: "heartbeat", hostname: "example.com" }); // 2s delta, new day
     await bg.handle({ type: "leaving", hostname: "example.com" });
     expect(getStore().stats).toEqual({

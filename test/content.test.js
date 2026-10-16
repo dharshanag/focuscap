@@ -195,6 +195,21 @@ describe("content.js engagement policy", () => {
     expect(content.isEngaged()).toBe(false);
   });
 
+  it("a non-numeric idleSeconds in the reply falls back to the 45s default instead of never counting", async () => {
+    fakeClock();
+    setVisibility("visible");
+    setFocus(false);
+    const { content } = await loadWithReply(reply({ settings: { idleEnabled: true, idleSeconds: "abc" } }));
+    window.dispatchEvent(new Event("mousemove"));
+    // `x < NaN` is always false, so without the fallback this page would never
+    // be engaged again (no heartbeats, no stats).
+    expect(content.isEngaged()).toBe(true);
+    vi.setSystemTime(Date.now() + 44_000);
+    expect(content.isEngaged()).toBe(true);
+    vi.setSystemTime(Date.now() + 1000);
+    expect(content.isEngaged()).toBe(false);
+  });
+
   it("playing media counts only while the page actually has focus", async () => {
     fakeClock();
     setVisibility("visible");

@@ -7,6 +7,19 @@ import { createChromeMock, stubSharedGlobals } from "./helpers/chrome-mock.js";
 // assertions below would fail for a reason that has nothing to do with
 // whether background.js/content.js/dashboard.js truly share one copy.
 import * as shared from "../shared.js";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { JSDOM } from "jsdom";
+
+// stats.js renders into stats.html's ids at import time, so mount the real
+// markup (minus script tags) before loading it.
+function mountStatsDom() {
+  const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "stats.html"), "utf8");
+  const page = new JSDOM(html).window.document;
+  page.querySelectorAll("script").forEach((s) => s.remove());
+  document.body.innerHTML = page.body.innerHTML;
+}
 
 // --- Issue #4: todayKey()/fmtClock() are copy-pasted across three files ---
 // https://github.com/dharshanag/focuscap/issues/5
@@ -18,7 +31,7 @@ import * as shared from "../shared.js";
 // currently-matching independent copies. If someone edits the day-key or
 // clock format in shared.js, this test should be the thing that turns red
 // if a file falls out of sync (e.g. by reintroducing a local copy).
-describe("todayKey()/fmtClock() stay consistent across background.js, dashboard.js, content.js", () => {
+describe("todayKey()/fmtClock() stay consistent across background.js, dashboard.js, content.js, stats.js", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -49,13 +62,23 @@ describe("todayKey()/fmtClock() stay consistent across background.js, dashboard.
     stubShared();
     const content = await import("../content.js");
 
+    vi.resetModules();
+    mountStatsDom();
+    vi.stubGlobal("chrome", createChromeMock({}).chrome);
+    stubShared();
+    vi.stubGlobal("classifyDomain", (await import("../classify.js")).classifyDomain);
+    const stats = await import("../stats.js");
+
     expect(dash.todayKey()).toBe(bg.todayKey());
     expect(content.todayKey()).toBe(bg.todayKey());
+    expect(stats.todayKey()).toBe(bg.todayKey());
 
     // Not just equal output — the same underlying function, proving all
-    // three files delegate to shared.js rather than keeping their own copy.
+    // four files delegate to shared.js rather than keeping their own copy.
     expect(dash.todayKey).toBe(bg.todayKey);
     expect(content.todayKey).toBe(bg.todayKey);
+    expect(stats.todayKey).toBe(shared.todayKey);
+    expect(stats.dayKey).toBe(shared.dayKey);
   });
 
   it("fmtClock() formats the same ms value identically in dashboard.js and content.js", async () => {

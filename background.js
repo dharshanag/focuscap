@@ -37,6 +37,10 @@ const DEFAULTS = {
 const STATS_DAYS = 14; // how many days of stats history to keep
 const STATS_FLUSH_MS = 5000; // write accumulated stats at most this often
 const TICK_CAP_MS = 5000; // a single heartbeat can't credit more than this
+// A domain's tick clock is "live" if a tick landed this recently: heartbeats
+// are 1 s apart, so a tick inside this window means another tab on the same
+// domain is still heartbeating (see "entering" below).
+const TICK_LIVE_MS = 2000;
 
 // ---- Per-domain stats accounting ----
 //
@@ -47,7 +51,15 @@ const TICK_CAP_MS = 5000; // a single heartbeat can't credit more than this
 // deliberately not persisted: the worker only sleeps when heartbeats have
 // stopped, and after a restart the first heartbeat (no clock yet) credits 0
 // rather than a stale capped 5 s. Two tabs on the same domain share one
-// clock, so they split the second between them instead of double counting.
+// clock, so they split the second between them instead of double counting;
+// "entering" leaves a live clock alone (rather than resetting it) so the
+// interval since the other tab's last tick isn't dropped on the floor, but
+// restarts a stale one so a tab re-shown after a long gap credits nothing
+// for the gap. Like the usage clock, the clock is NOT cleared on "leaving"
+// or when a visible page goes idle, so the first tick after a long idle
+// stretch credits up to TICK_CAP_MS rather than ~1 s — a bounded over-credit
+// per resume, kept identical to rec.lastTickAt so stats and budget agree.
+// A tick that straddles local midnight is credited wholly to the new day.
 //
 // Throttle: deltas accumulate in `pending` and are merged into storage at
 // most every STATS_FLUSH_MS — on the first heartbeat that is due, on
@@ -96,11 +108,17 @@ function drainStats(base, now, force) {
   pending.day = null;
   pending.deltas = {};
   lastStatsFlushAt = now;
+  cancelStatsFlushTimer();
+  return pruneStats(stats);
+}
+
+// Also used by tests as a teardown hook so a real-timer flush armed by one
+// module instance can't outlive it and fire into a later test's mock.
+function cancelStatsFlushTimer() {
   if (statsFlushTimer) {
     clearTimeout(statsFlushTimer);
     statsFlushTimer = null;
   }
-  return pruneStats(stats);
 }
 
 // Make sure anything left in `pending` reaches storage within STATS_FLUSH_MS
@@ -365,7 +383,10 @@ async function handleLocked(msg) {
   // Content script announces it just became engaged with a page.
   if (msg.type === "entering") {
     if (!domain) return { track: false };
-    tickClock[domain] = now;
+    // Start this domain's stats clock — unless it's still live (another tab
+    // on the same domain ticked within TICK_LIVE_MS), in which case leave it
+    // so the next heartbeat credits the whole interval since that tick.
+    if (!(now - tickClock[domain] <= TICK_LIVE_MS)) tickClock[domain] = now;
     if (!site) return untracked(); // stats only — usage is never touched
     const rec = siteUsage(usage, site.domain);
     rec.lastTickAt = now;
@@ -452,7 +473,9 @@ if (typeof module !== "undefined" && module.exports) {
     UNLOCK_ALARM_PREFIX,
     STATS_DAYS,
     STATS_FLUSH_MS,
+    TICK_LIVE_MS,
     statsDomain,
-    pruneStats
+    pruneStats,
+    cancelStatsFlushTimer
   };
 }

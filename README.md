@@ -24,9 +24,10 @@ site once its rules say so.
   **you're not idle**. Recent input counts even if a browser menu or the
   Focus Cap popup briefly stole keyboard focus; a playing video counts only
   while the window is actually focused, so alt-tabbing away stops the drain.
-  Idle-pausing can be turned off (`settings.idleEnabled: false`), in which
-  case all visible time counts. Background music in another tab never
-  counts, because a backgrounded tab is hidden.
+  Idle-pausing can be turned off (`settings.idleEnabled: false` in storage;
+  the options-page toggle for it is planned, not built yet), in which case
+  all visible time counts. Background music in another tab never counts,
+  because a backgrounded tab is hidden.
 - **Daily stats** for every site, not just the blocked ones: each page's
   engaged time is recorded per domain per day (`stats`, 14 days kept). The
   popup's **📊 Daily stats** button opens a page with today's active /
