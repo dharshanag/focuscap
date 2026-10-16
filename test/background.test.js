@@ -1082,13 +1082,22 @@ describe("background.js per-domain stats", () => {
 
   it("a rejected tabs.create on first install is swallowed (defaults are still seeded)", async () => {
     const { listeners, chrome, getStore } = await loadBackground({});
-    chrome.tabs.create = vi.fn(() => Promise.reject(new Error("no window")));
+    // A plain function, NOT vi.fn: vitest's spy attaches its own handler to
+    // the returned promise (for mock.settledResults), which marks the
+    // rejection as handled and would make this test pass even without the
+    // .catch in background.js.
+    let createCalls = 0;
+    chrome.tabs.create = () => {
+      createCalls++;
+      return Promise.reject(new Error("no window"));
+    };
     const rejections = [];
     const onUnhandled = (r) => rejections.push(r);
     process.on("unhandledRejection", onUnhandled);
     try {
       await listeners.onInstalled[0]({ reason: "install" });
       await flush();
+      expect(createCalls).toBe(1);
       expect(rejections).toHaveLength(0);
     } finally {
       process.off("unhandledRejection", onUnhandled);

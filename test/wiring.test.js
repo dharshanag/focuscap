@@ -191,7 +191,9 @@ describe("options page wiring", () => {
         expect(src, `${name} duplicated in ${f}`).not.toMatch(new RegExp(`(function\\s+${name}\\b|\\b(const|let|var)\\s+${name}\\s*=)`));
       }
       // The falsy-zero parse pattern main had (parseInt(x) || default).
-      expect(src, `${f} uses parseInt(...) || fallback`).not.toMatch(/parseInt\([^)]*\)\s*\|\|/);
+      // The call may itself contain a call (parseInt(el("x").value, 10) || 45),
+      // so allow one level of nested parentheses before the closing one.
+      expect(src, `${f} uses parseInt(...) || fallback`).not.toMatch(/parseInt\((?:[^()]|\([^()]*\))*\)\s*\|\|/);
     }
     // The popup opens the options page through the proper API, not by URL.
     expect(read("dashboard.js")).toContain("chrome.runtime.openOptionsPage()");

@@ -15,6 +15,11 @@ function mountOptionsDom() {
   document.body.innerHTML = page.body.innerHTML;
 }
 
+// The most recently loaded options.js module, so afterEach can stop its
+// periodic re-render timer (each test imports a fresh module into the same
+// jsdom; a stale module's timer must never paint into a later test's DOM).
+let lastOpts = null;
+
 async function loadOptions(initialStorage) {
   vi.resetModules();
   mountOptionsDom();
@@ -22,6 +27,7 @@ async function loadOptions(initialStorage) {
   vi.stubGlobal("chrome", mock.chrome);
   stubSharedGlobals(await import("../shared.js"));
   const opts = await import("../options.js");
+  lastOpts = opts;
   await flush(); // let the import-time load() finish rendering
   return { opts, ...mock };
 }
@@ -39,6 +45,8 @@ const onboarded = { onboarded: true };
 
 describe("options.js", () => {
   afterEach(() => {
+    if (lastOpts) lastOpts.stopRetick();
+    lastOpts = null;
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
@@ -229,6 +237,36 @@ describe("options.js", () => {
       expect(row("youtube.com").querySelector(".budget").title).toBe("Blocked by a schedule rule");
       await opts.removeSite("youtube.com");
       expect(getStore().focusSites.map((s) => s.domain)).toEqual(["youtube.com"]);
+    });
+
+    it("removeSite() refuses in the last 5 minutes of the site's budget even though the row was rendered earlier (live re-read)", async () => {
+      const { opts, getStore, setStore } = await loadOptions({
+        ...onboarded,
+        focusSites: [{ domain: "youtube.com", budgetSeconds: 1800 }],
+        budgetSeconds: 7200
+      });
+      expect(row("youtube.com").querySelector(".remove").disabled).toBe(false);
+      // Usage ticks past the threshold after the row rendered (no onChanged
+      // delivered yet); the removal must re-read storage, not trust the row.
+      setStore({ usage: { date: localTodayKey(), totalMs: 1_560_000, sites: { "youtube.com": { totalMs: 1_560_000 } } } });
+      await opts.removeSite("youtube.com");
+      expect(getStore().focusSites).toHaveLength(1);
+      expect(row("youtube.com").querySelector(".remove").disabled).toBe(true); // and the row caught up
+    });
+
+    it("removing a site forgets its open editor, so re-adding the domain starts collapsed", async () => {
+      const { opts, getStore } = await loadOptions({ ...onboarded, focusSites: [{ domain: "youtube.com" }], budgetSeconds: 3600 });
+      row("youtube.com").querySelector(".edit").click();
+      await flush();
+      expect(row("youtube.com").querySelector(".site-editor")).not.toBeNull();
+      await opts.removeSite("youtube.com");
+      expect(getStore().focusSites).toEqual([]);
+      expect(opts.expanded.has("youtube.com")).toBe(false);
+      el("domainInput").value = "youtube.com";
+      el("addForm").dispatchEvent(new Event("submit", { cancelable: true }));
+      await flush();
+      expect(row("youtube.com")).not.toBeNull();
+      expect(row("youtube.com").querySelector(".site-editor")).toBeNull();
     });
 
     it("off-hours rows read 'off-hours'; a blackout locks every row with the blackout's end", async () => {
@@ -621,6 +659,31 @@ describe("options.js", () => {
       expect(el("budgetHours").value).toBe("0");
       expect(el("budgetMinutes").value).toBe("1");
     });
+
+    it("saveBudget() refuses once the cap is spent even though the fields were rendered enabled (live re-read)", async () => {
+      const { opts, getStore, setStore } = await loadOptions({
+        ...onboarded,
+        focusSites: [{ domain: "youtube.com" }],
+        budgetSeconds: 600
+      });
+      expect(el("budgetHours").disabled).toBe(false);
+      // The cap is spent after the card rendered; a stale, enabled field must not raise it.
+      setStore({ usage: { date: localTodayKey(), totalMs: 600_000, sites: { "youtube.com": { totalMs: 600_000 } } } });
+      el("budgetHours").value = "2";
+      el("budgetMinutes").value = "0";
+      change(el("budgetHours"));
+      await flush();
+      expect(getStore().budgetSeconds).toBe(600);
+      expect(el("budgetHours").value).toBe("0");
+      expect(el("budgetMinutes").value).toBe("10");
+      expect(el("budgetHours").disabled).toBe(true);
+    });
+
+    it("a stored cap that isn't minute-aligned rounds to whole minutes, carrying into the hours field (no 60 m)", async () => {
+      await loadOptions({ ...onboarded, budgetSeconds: 3599 });
+      expect(el("budgetHours").value).toBe("1");
+      expect(el("budgetMinutes").value).toBe("0");
+    });
   });
 
   // --- Global schedule editor ---
@@ -839,6 +902,45 @@ describe("options.js", () => {
     expect(row("youtube.com").querySelector(".site-editor")).not.toBeNull(); // still open
   });
 
+  it("a usage tick doesn't overwrite a half-typed Daily limit, but a spent cap still reverts the fields", async () => {
+    const { listeners, setStore, getStore } = await loadOptions({
+      ...onboarded,
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 600 }],
+      budgetSeconds: 1800
+    });
+    const hours = el("budgetHours");
+    hours.focus();
+    expect(document.activeElement).toBe(hours);
+    hours.value = "1";
+    el("budgetMinutes").value = "5";
+
+    const tick = (totalMs) => {
+      const usage = { date: localTodayKey(), totalMs, sites: { "youtube.com": { totalMs } } };
+      setStore({ usage });
+      listeners.onChanged.forEach((fn) => fn({ usage: { newValue: usage } }, "local"));
+    };
+    tick(60_000);
+    await flush();
+    expect(el("remaining").textContent).toBe("29:00 left today"); // the countdown still refreshed
+    expect(hours.value).toBe("1"); // the edit in progress survived
+    expect(el("budgetMinutes").value).toBe("5");
+
+    // Committing while still focused saves and reflects the clamped value.
+    hours.value = "3";
+    change(hours);
+    await flush();
+    expect(getStore().budgetSeconds).toBe(7200);
+    expect(hours.value).toBe("2");
+    expect(el("budgetMinutes").value).toBe("0");
+
+    // Once the cap is spent the fields freeze, so the stored value wins over a typed one.
+    hours.value = "1";
+    tick(7_200_000);
+    await flush();
+    expect(hours.disabled).toBe(true);
+    expect(hours.value).toBe("2");
+  });
+
   it("a focusSites change written by the popup re-renders the list", async () => {
     const { listeners, setStore } = await loadOptions({ ...onboarded, focusSites: [{ domain: "youtube.com" }] });
     const focusSites = [{ domain: "youtube.com" }, { domain: "reddit.com" }];
@@ -846,5 +948,80 @@ describe("options.js", () => {
     listeners.onChanged.forEach((fn) => fn({ focusSites: { newValue: focusSites } }, "local"));
     await flush();
     expect(row("reddit.com")).not.toBeNull();
+  });
+
+  it("a config change (focusSites / schedule) re-renders the list even while focus is inside an open editor", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 0, 14, 10, 0, 0)); // Wed 10:00
+    const { listeners, setStore } = await loadOptions({
+      ...onboarded,
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 600 }],
+      budgetSeconds: 3600
+    });
+    row("youtube.com").querySelector(".edit").click();
+    await flush();
+    let input = row("youtube.com").querySelector(".site-budget");
+    input.focus();
+    expect(document.activeElement).toBe(input);
+
+    // The popup adds a site: the new row must appear even though we're editing.
+    const focusSites = [{ domain: "youtube.com", budgetSeconds: 600 }, { domain: "reddit.com" }];
+    setStore({ focusSites });
+    listeners.onChanged.forEach((fn) => fn({ focusSites: { newValue: focusSites } }, "local"));
+    await flush();
+    expect(row("reddit.com")).not.toBeNull();
+    expect(row("youtube.com").querySelector(".site-editor")).not.toBeNull(); // still open after the rebuild
+
+    // The background flips the schedule into a blackout: every row must read as locked, editor or not.
+    input = row("youtube.com").querySelector(".site-budget");
+    input.focus();
+    expect(document.activeElement).toBe(input);
+    const schedule = { enabled: true, days: allDays, windows: [], blackouts: [{ start: "09:00", end: "17:00", days: [3] }] };
+    setStore({ schedule });
+    listeners.onChanged.forEach((fn) => fn({ schedule: { newValue: schedule } }, "local"));
+    await flush();
+    expect(row("youtube.com").querySelector(".budget").textContent).toBe("🔒 scheduled until 17:00");
+    expect(row("youtube.com").querySelector(".budget").title).toBe("Blocked by your global blackout");
+    expect(row("reddit.com").querySelector(".budget").textContent).toBe("🔒 scheduled until 17:00");
+    expect(row("youtube.com").querySelector(".site-budget").disabled).toBe(true);
+  });
+
+  it("time-dependent statuses are re-derived every 30 s and on tab visibility without a storage change (not while editing)", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    vi.setSystemTime(new Date(2026, 0, 14, 9, 59, 50)); // Wed 09:59:50, 10 s before the block window
+    const { listeners } = await loadOptions({
+      ...onboarded,
+      focusSites: [
+        { domain: "youtube.com", budgetSeconds: 1800, rules: [{ type: "block", days: [3], start: "10:00", end: "17:00" }] },
+        { domain: "reddit.com", budgetSeconds: 1800 }
+      ],
+      budgetSeconds: 3600
+    });
+    expect(listeners.onChanged).toHaveLength(1); // nothing below goes through storage
+    expect(row("youtube.com").querySelector(".budget").textContent).toBe("30:00 left");
+    expect(row("youtube.com").querySelector(".remove").disabled).toBe(false);
+
+    // Editing another site's budget: the clock passes 10:00 but the list is left alone.
+    row("reddit.com").querySelector(".edit").click();
+    await flush();
+    const input = row("reddit.com").querySelector(".site-budget");
+    input.focus();
+    vi.advanceTimersByTime(30_000); // -> 10:00:20
+    expect(document.activeElement).toBe(input);
+    expect(row("youtube.com").querySelector(".budget").textContent).toBe("30:00 left"); // stale by design
+
+    input.blur();
+    vi.advanceTimersByTime(30_000); // -> 10:00:50
+    expect(row("youtube.com").querySelector(".budget").textContent).toBe("🔒 scheduled until 17:00");
+    expect(row("youtube.com").classList.contains("locked")).toBe(true);
+    expect(row("youtube.com").querySelector(".remove").disabled).toBe(true);
+    expect(row("reddit.com").querySelector(".site-editor")).not.toBeNull(); // the open editor survived
+
+    // Switching back to the tab refreshes immediately, without waiting for the timer.
+    vi.setSystemTime(new Date(2026, 0, 14, 17, 0, 5)); // the window just ended
+    Object.defineProperty(document, "hidden", { value: false, configurable: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(row("youtube.com").querySelector(".budget").textContent).toBe("30:00 left");
+    expect(row("youtube.com").classList.contains("locked")).toBe(false);
   });
 });

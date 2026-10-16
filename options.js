@@ -16,6 +16,7 @@ const DEFAULT_SETTINGS = { idleEnabled: true, idleSeconds: 45 };
 const DEFAULT_BUDGET_SECONDS = 1800; // global cap across all sites (30 min)
 const MAX_BUDGET_SECONDS = 2 * 60 * 60; // hard cap: 2 hours
 const MIN_BUDGET_SECONDS = 60; // at least 1 minute
+const RETICK_MS = 30_000; // how often time-dependent statuses are re-derived without a storage change
 const REMOVE_LOCK_MS = 5 * 60 * 1000; // can't remove sites in the last 5 min
 const PRESETS = [
   "youtube.com", "instagram.com", "tiktok.com", "twitter.com",
@@ -56,6 +57,8 @@ let model = computeModel(store); // derived per-site statuses for `store` at "no
 
 // Which site editors are open, by domain — survives re-renders.
 const expanded = new Set();
+
+let retickTimer = null; // the periodic status re-derivation (see retick, below)
 
 function computeModel(snapshot) {
   const now = Date.now();
@@ -269,6 +272,7 @@ async function removeSite(domain) {
   }
   const raw = (store.focusSites || []).slice();
   raw.splice(index, 1);
+  expanded.delete(domain); // re-adding the domain later starts collapsed
   await persist({ focusSites: raw });
 }
 
@@ -496,8 +500,17 @@ async function updateSite(domain, mutate, opts = {}) {
 // --- Daily limit (global cap) ------------------------------------------------
 
 function fillBudgetFields(budgetSeconds) {
-  el("budgetHours").value = Math.floor(budgetSeconds / 3600);
-  el("budgetMinutes").value = Math.round((budgetSeconds % 3600) / 60);
+  // Round to whole minutes first so a non-minute-aligned value (e.g. 3599)
+  // carries into the hours field instead of rendering as "60" minutes.
+  const totalMinutes = Math.round(budgetSeconds / 60);
+  el("budgetHours").value = Math.floor(totalMinutes / 60);
+  el("budgetMinutes").value = totalMinutes % 60;
+}
+
+// True while the cursor is in one of the Daily-limit fields.
+function editingBudget() {
+  const active = document.activeElement;
+  return active === el("budgetHours") || active === el("budgetMinutes");
 }
 
 function renderBudget() {
@@ -505,7 +518,10 @@ function renderBudget() {
   const usedMs = usage.totalMs;
   const locked = usedMs >= globalBudgetMs;
 
-  fillBudgetFields(budgetSeconds);
+  // A background usage tick re-renders this card every second while a
+  // tracked site is open elsewhere; don't overwrite a half-typed limit. Once
+  // the cap is spent the fields freeze anyway, so the stored value wins.
+  if (locked || !editingBudget()) fillBudgetFields(budgetSeconds);
   el("budgetHours").disabled = locked;
   el("budgetMinutes").disabled = locked;
   el("budgetNote").hidden = !locked;
@@ -533,6 +549,9 @@ async function saveBudget() {
   }
   const total = clampBudgetSeconds(parseIntOr(el("budgetHours").value, 0), parseIntOr(el("budgetMinutes").value, 0));
   await persist({ budgetSeconds: total });
+  // Reflect the clamped value back (e.g. 3h -> 2h 0m) even if the field still
+  // has focus — renderBudget() skips the fill while you're typing.
+  fillBudgetFields(total);
 }
 
 // --- Global schedule ---------------------------------------------------------
@@ -698,7 +717,8 @@ if (typeof module !== "undefined" && module.exports) {
     saveAdvanced,
     finishOnboarding,
     openStats,
-    expanded
+    expanded,
+    stopRetick: () => clearInterval(retickTimer)
   };
 }
 
@@ -738,6 +758,23 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (!editing) renderSites();
   }
   if (changes.settings) renderAdvanced();
+});
+
+// Statuses are time-dependent (a rule window opening, a cool-down ending, a
+// blackout starting) but storage only changes while a tracked site is open
+// somewhere. Re-derive from the cached snapshot on a coarse timer, and when
+// the tab comes back into view, so a long-lived Dashboard tab doesn't show a
+// stale row. Same focus guard as the usage tick: never yank an open editor.
+function retick() {
+  model = computeModel(store);
+  renderBudget();
+  const active = document.activeElement;
+  const editing = active && typeof active.closest === "function" && active.closest(".site-editor");
+  if (!editing) renderSites();
+}
+retickTimer = setInterval(retick, RETICK_MS);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) retick();
 });
 
 load();

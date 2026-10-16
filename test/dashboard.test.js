@@ -113,6 +113,12 @@ describe("dashboard.js (popup)", () => {
       expect(el("budgetMinutes").value).toBe("30");
     });
 
+    it("a stored cap that isn't minute-aligned rounds to whole minutes, carrying into the hours field (no 60 m)", async () => {
+      await loadDashboard({ budgetSeconds: 3599 });
+      expect(el("budgetHours").value).toBe("1");
+      expect(el("budgetMinutes").value).toBe("0");
+    });
+
     it("saves hours + minutes as seconds", async () => {
       const { dash, getStore } = await loadDashboard({ budgetSeconds: 1800 });
       setBudgetFields("1", "15");
@@ -309,6 +315,16 @@ describe("dashboard.js (popup)", () => {
       expect(getStore().focusSites.map((s) => s.domain)).toEqual(["reddit.com", "news.ycombinator.com"]);
     });
 
+    it("adding a site tolerates a corrupt (null) focusSites entry instead of throwing on the duplicate check", async () => {
+      const { dash, getStore } = await loadDashboard({ focusSites: [null, { domain: "reddit.com" }], budgetSeconds: 3600 });
+      el("domainInput").value = "youtube.com";
+      await dash.addSite({ preventDefault() {} });
+      expect(getStore().focusSites.map((s) => s && s.domain)).toEqual([null, "reddit.com", "youtube.com"]);
+      el("domainInput").value = "reddit.com";
+      await dash.addSite({ preventDefault() {} });
+      expect(getStore().focusSites).toHaveLength(3); // still no dupes
+    });
+
     it("removeSite() refuses while the site is locked but allows an unlocked site with plenty left", async () => {
       const { dash, getStore } = await loadDashboard({
         focusSites: [
@@ -375,6 +391,35 @@ describe("dashboard.js (popup)", () => {
     listeners.onChanged.forEach((fn) => fn({ usage: { newValue: usage } }, "local"));
     await flush();
     expect(row("youtube.com").querySelector(".budget").textContent).toBe("9:00 left");
+  });
+
+  it("a usage tick doesn't overwrite a half-typed Daily limit, but a spent cap still reverts the fields", async () => {
+    const { listeners, setStore } = await loadDashboard({
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 600 }],
+      budgetSeconds: 1800
+    });
+    const minutes = el("budgetMinutes");
+    minutes.focus();
+    expect(document.activeElement).toBe(minutes);
+    el("budgetHours").value = "1";
+    minutes.value = "5";
+    const tick = (totalMs) => {
+      const usage = { date: localTodayKey(), totalMs, sites: { "youtube.com": { totalMs } } };
+      setStore({ usage });
+      listeners.onChanged.forEach((fn) => fn({ usage: { newValue: usage } }, "local"));
+    };
+    tick(60_000);
+    await flush();
+    expect(el("remaining").textContent).toBe("29:00 left today"); // the countdown still refreshed
+    expect(el("budgetHours").value).toBe("1"); // the edit in progress survived
+    expect(minutes.value).toBe("5");
+
+    // Once the cap is spent the fields freeze, so the stored value wins over a typed one.
+    tick(1_800_000);
+    await flush();
+    expect(minutes.disabled).toBe(true);
+    expect(el("budgetHours").value).toBe("0");
+    expect(minutes.value).toBe("30");
   });
 });
 

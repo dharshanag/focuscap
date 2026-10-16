@@ -47,8 +47,17 @@ function clampBudgetSeconds(hours, minutes) {
 }
 
 function fillBudgetFields(budgetSeconds) {
-  el("budgetHours").value = Math.floor(budgetSeconds / 3600);
-  el("budgetMinutes").value = Math.round((budgetSeconds % 3600) / 60);
+  // Round to whole minutes first so a non-minute-aligned value (e.g. 3599)
+  // carries into the hours field instead of rendering as "60" minutes.
+  const totalMinutes = Math.round(budgetSeconds / 60);
+  el("budgetHours").value = Math.floor(totalMinutes / 60);
+  el("budgetMinutes").value = totalMinutes % 60;
+}
+
+// True while the cursor is in one of the Daily-limit fields.
+function editingBudget() {
+  const active = document.activeElement;
+  return active === el("budgetHours") || active === el("budgetMinutes");
 }
 
 async function readModel() {
@@ -74,7 +83,10 @@ async function load() {
   const global = scheduleStateAt(schedule, at);
   const blackoutUntil = global.blackout ? scheduleBlackoutUntil(schedule, at) : null;
 
-  fillBudgetFields(budgetSeconds);
+  // A usage tick from the background re-runs load() every second while a
+  // tracked site is open; don't overwrite a half-typed limit. Once the cap is
+  // spent the fields freeze anyway, so the stored value wins.
+  if (globalLocked || !editingBudget()) fillBudgetFields(budgetSeconds);
   renderStatus(usedMs, globalBudgetMs, globalLocked, global, blackoutUntil);
   renderSites(sites, statuses, usage, global.blackout);
 }
@@ -174,7 +186,7 @@ async function addSite(e) {
   if (!domain) return;
   const { focusSites } = await get(["focusSites"]);
   const sites = focusSites || [];
-  if (sites.some((s) => s.domain === domain)) return; // no dupes
+  if (sites.some((s) => s && s.domain === domain)) return; // no dupes (tolerates a corrupt entry)
   sites.push(normalizeSite({ domain }));
   await set({ focusSites: sites });
   el("domainInput").value = "";
