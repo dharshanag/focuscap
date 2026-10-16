@@ -97,17 +97,23 @@ async function readModel() {
 }
 
 async function load() {
-  const { store, budgetSeconds, globalBudgetMs, usage, sites, statuses } = await readModel();
+  const { store, now, budgetSeconds, globalBudgetMs, usage, sites, statuses, schedule } = await readModel();
   const usedMs = usage.totalMs;
   const globalLocked = usedMs >= globalBudgetMs;
+  // The global schedule's state right now: a blackout locks every site, and
+  // off-hours nothing is counted — both override what the header would
+  // otherwise say about the total cap.
+  const at = new Date(now);
+  const global = scheduleStateAt(schedule, at);
+  const blackoutUntil = global.blackout ? scheduleBlackoutUntil(schedule, at) : null;
 
   el("budgetInput").value = (budgetSeconds / 60).toFixed(budgetSeconds % 60 ? 1 : 0);
-  renderStatus(usedMs, globalBudgetMs, globalLocked);
-  renderSites(sites, statuses, usage);
+  renderStatus(usedMs, globalBudgetMs, globalLocked, global, blackoutUntil);
+  renderSites(sites, statuses, usage, global.blackout);
   el("idleInput").value = (store.settings || DEFAULT_SETTINGS).idleSeconds;
 }
 
-function renderStatus(usedMs, budgetMs, locked) {
+function renderStatus(usedMs, budgetMs, locked, global = { enforcing: true, blackout: false }, blackoutUntil = null) {
   const pill = el("statusPill");
   const box = el("remaining");
   const fill = el("barFill");
@@ -116,7 +122,17 @@ function renderStatus(usedMs, budgetMs, locked) {
   fill.style.width = `${pct}%`;
   fill.className = "bar-fill" + (locked ? " full" : pct > 75 ? " warn" : "");
 
-  if (locked) {
+  if (global.blackout) {
+    box.textContent = `🔒 Blackout${blackoutUntil ? ` until ${fmtUntil(blackoutUntil)}` : ""}`;
+    box.className = "remaining big empty";
+    pill.textContent = "Blackout";
+    pill.className = "pill locked";
+  } else if (!global.enforcing) {
+    box.textContent = "Off-hours — nothing is counted";
+    box.className = "remaining big";
+    pill.textContent = "Off";
+    pill.className = "pill off";
+  } else if (locked) {
     box.textContent = "🔒 Total cap reached";
     box.className = "remaining big empty";
     pill.textContent = "Locked";
@@ -134,7 +150,7 @@ function renderStatus(usedMs, budgetMs, locked) {
   el("budgetNote").hidden = !locked;
 }
 
-function renderSites(sites, statuses, usage) {
+function renderSites(sites, statuses, usage, blackout = false) {
   const list = el("siteList");
   list.innerHTML = "";
   if (!sites.length) {
@@ -163,7 +179,11 @@ function renderSites(sites, statuses, usage) {
     const meta = document.createElement("span");
     meta.className = "budget";
     meta.textContent = describeStatus(status);
-    if (status.locked) meta.title = status.reason === "schedule" ? "Blocked by a schedule rule" : "Out of time";
+    // A global blackout and a per-site block window both lock with reason
+    // "schedule"; the blackout outranks the rules, so when one is on that's
+    // what the row is showing.
+    if (status.locked && status.reason === "schedule") meta.title = blackout ? "Blocked by your global blackout" : "Blocked by a schedule rule";
+    else if (status.locked) meta.title = "Out of time";
     else if (status.free) meta.title = "Outside your enforcement hours — time here isn't counted";
 
     const edit = document.createElement("button");

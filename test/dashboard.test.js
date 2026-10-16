@@ -387,6 +387,8 @@ describe("dashboard.js", () => {
         focusSites: [{ domain: "youtube.com", rules: [{ type: "block", days: [3], start: "09:00", end: "17:00" }] }],
         budgetSeconds: 3600
       });
+      // A per-site block window (no global blackout) names the rule.
+      expect(row("youtube.com").querySelector(".budget").title).toBe("Blocked by a schedule rule");
       await dash.removeSite("youtube.com");
       expect(getStore().focusSites.map((s) => s.domain)).toEqual(["youtube.com"]);
     });
@@ -453,6 +455,13 @@ describe("dashboard.js global schedule", () => {
     expect(li.querySelector(".budget").title).toMatch(/enforcement hours/);
     expect(li.querySelector(".remove").disabled).toBe(false);
     expect(dash.describeStatus({ locked: false, free: true, remainingMs: 600_000 })).toBe("off-hours");
+    // The header agrees with the rows instead of advertising a countdown
+    // that isn't running.
+    expect(document.getElementById("remaining").textContent).toBe("Off-hours — nothing is counted");
+    expect(document.getElementById("statusPill").textContent).toBe("Off");
+    expect(document.getElementById("statusPill").className).toBe("pill off");
+    // The total-cap field is still editable off-hours (the cap isn't spent).
+    expect(document.getElementById("budgetInput").disabled).toBe(false);
 
     await dash.removeSite("youtube.com");
     expect(getStore().focusSites).toEqual([]);
@@ -468,6 +477,8 @@ describe("dashboard.js global schedule", () => {
       schedule: officeHours
     });
     expect(row("youtube.com").querySelector(".budget").textContent).toBe("9:00 left");
+    expect(document.getElementById("remaining").textContent).toBe("59:00 left in total cap");
+    expect(document.getElementById("statusPill").className).toBe("pill on");
   });
 
   it("during a global blackout every site reads as scheduled-locked until the blackout ends, and can't be removed or edited", async () => {
@@ -482,8 +493,14 @@ describe("dashboard.js global schedule", () => {
       const li = row(domain);
       expect(li.classList.contains("locked")).toBe(true);
       expect(li.querySelector(".budget").textContent).toBe("🔒 scheduled until 13:30");
+      // No per-site rule is involved, and the hover text says so.
+      expect(li.querySelector(".budget").title).toBe("Blocked by your global blackout");
       expect(li.querySelector(".remove").disabled).toBe(true);
     }
+    // The header reports the blackout rather than a live total-cap countdown.
+    expect(document.getElementById("remaining").textContent).toBe("🔒 Blackout until 13:30");
+    expect(document.getElementById("statusPill").textContent).toBe("Blackout");
+    expect(document.getElementById("statusPill").className).toBe("pill locked");
     const ok = await dash.updateSite("youtube.com", (s) => ({ ...s, budgetSeconds: 60_000 }));
     expect(ok).toBe(false);
     expect(getStore().focusSites[0].budgetSeconds).toBe(600);

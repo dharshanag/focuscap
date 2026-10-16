@@ -701,7 +701,9 @@ describe("background.js per-domain stats", () => {
       budgetSeconds: 1800
     });
     const enter = await bg.handle({ type: "entering", hostname: "docs.example.org" });
-    expect(enter).toEqual({ track: true, tracked: false, overlay: false, settings: { idleEnabled: true, idleSeconds: 45 } });
+    // Every reply carries `free` (the global schedule's off-hours flag); an
+    // untracked page is never "free" — it's simply not on the list.
+    expect(enter).toEqual({ track: true, tracked: false, overlay: false, free: false, settings: { idleEnabled: true, idleSeconds: 45 } });
 
     const res = await beat(bg, "docs.example.org", 3);
     expect(res.track).toBe(true);
@@ -1162,12 +1164,22 @@ describe("background.js global schedule", () => {
     expect(status.locked).toBe(true);
     expect(status.reason).toBe("schedule");
 
+    const posted = captureHost(chrome);
     await bg.guardNavigation({ frameId: 0, tabId: 5, url: "https://m.youtube.com/watch?v=1" });
     expect(chrome.tabs.update).toHaveBeenCalledWith(5, { url: expect.stringContaining("time-is-up.html") });
     expect(getStore().lastBlocked).toBe("m.youtube.com");
     expect(getStore().lastBlockedReason).toBe("schedule");
     expect(getStore().lastBlockedUntil).toBe(WED(11).getTime());
     expect(chrome.alarms.create).toHaveBeenCalledWith("unlock:youtube.com", { when: WED(11).getTime() });
+    // No heartbeat follows a navigation-time block, so the per-site snapshot
+    // guardNavigation() pushes to the companion must already reflect the
+    // blackout — every tracked site locked with reason "schedule" until it
+    // ends, not an all-unlocked map with fresh budgets.
+    const snaps = posted.filter((m) => m && m.sites);
+    expect(snaps.length).toBeGreaterThan(0);
+    expect(snaps[snaps.length - 1].sites["youtube.com"]).toEqual({
+      locked: true, reason: "schedule", until: WED(11).getTime(), remainingMs: 3_600_000
+    });
 
     // Once the blackout is over the same navigation sails through.
     vi.setSystemTime(WED(11));

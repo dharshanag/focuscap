@@ -36,7 +36,10 @@ const DEFAULTS = {
   budgetSeconds: 1800, // global daily cap across all sites (default 30 min)
   usage: { date: "", totalMs: 0, sites: {} },
   stats: {}, // per-day, per-domain engaged time (see storage layout above)
-  schedule: SCHEDULE_DEFAULTS // global enforcement windows + blackouts; off = always on
+  // Global enforcement windows + blackouts; off = always on. Copied so an
+  // in-place edit of DEFAULTS can never alter the fallback scheduleStateAt()
+  // uses when storage has no schedule.
+  schedule: { ...SCHEDULE_DEFAULTS, days: [...SCHEDULE_DEFAULTS.days] }
 };
 
 const STATS_DAYS = 14; // how many days of stats history to keep
@@ -378,7 +381,7 @@ async function handleLocked(msg) {
   // says whether this page is on the distraction list (budget + badge);
   // `free` says the global schedule isn't enforcing right now (off-hours), so
   // nothing is being charged and the badge stays hidden.
-  const untracked = () => ({ track: true, tracked: false, overlay: false, settings });
+  const untracked = () => ({ track: true, tracked: false, overlay: false, free: false, settings });
   const respond = (status) => ({
     track: true,
     tracked: true,
