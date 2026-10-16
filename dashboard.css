@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --bg: #14141f;
   --panel: #1e1e2e;
   --text: #e7e7f0;
@@ -7,6 +8,26 @@
   --accent-dim: #6d5bb5;
   --danger: #f87171;
   --green: #34d399;
+  --edge: rgba(255,255,255,0.09);
+  --hover: rgba(255,255,255,0.14);
+  /* A barely-there fill for nested blocks (rule rows) inside a panel. */
+  --subtle: rgba(255,255,255,0.04);
+  --locked-bg: rgba(248,113,113,0.12);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f4f7;
+  --panel: #ffffff;
+  --text: #1b1b26;
+  --muted: #63637a;
+  --accent: #7c3aed;
+  --accent-dim: #8b5cf6;
+  --danger: #dc2626;
+  --green: #059669;
+  --edge: rgba(0,0,0,0.10);
+  --hover: rgba(0,0,0,0.06);
+  --subtle: rgba(0,0,0,0.04);
+  --locked-bg: rgba(220,38,38,0.08);
 }
 
 * { box-sizing: border-box; }
@@ -42,13 +63,20 @@ h2 {
   margin: 18px 0 8px;
 }
 
+.header-right { display: flex; align-items: center; gap: 8px; }
+.theme-toggle {
+  background: var(--edge); border: 1px solid var(--edge); color: var(--text);
+  border-radius: 8px; cursor: pointer; font-size: 14px; line-height: 1; padding: 4px 7px;
+}
+.theme-toggle:hover { background: var(--hover); }
+
 .pill {
   font-size: 11px;
   font-weight: 600;
   padding: 4px 10px;
   border-radius: 999px;
 }
-.pill.off { background: rgba(255,255,255,0.08); color: var(--muted); }
+.pill.off { background: var(--edge); color: var(--muted); }
 .pill.on { background: rgba(52,211,153,0.18); color: var(--green); font-variant-numeric: tabular-nums; }
 .pill.locked { background: rgba(248,113,113,0.18); color: var(--danger); }
 
@@ -76,7 +104,7 @@ h2 {
 
 .bar {
   height: 6px;
-  background: rgba(255,255,255,0.08);
+  background: var(--edge);
   border-radius: 999px;
   overflow: hidden;
   margin: 10px 0 2px;
@@ -103,7 +131,7 @@ h2 {
 }
 .site-list .domain { flex: 1; font-weight: 500; }
 .site-list .budget { color: var(--muted); font-size: 12px; }
-.site-list li.locked { background: rgba(248,113,113,0.12); }
+.site-list li.locked { background: var(--locked-bg); }
 .site-list li.locked .domain { color: var(--muted); text-decoration: line-through; }
 .site-list li.locked .budget { color: var(--danger); font-weight: 600; }
 .site-list .remove {
@@ -122,7 +150,7 @@ h2 {
 
 input {
   background: var(--panel);
-  border: 1px solid rgba(255,255,255,0.08);
+  border: 1px solid var(--edge);
   color: var(--text);
   border-radius: 8px;
   padding: 8px;
@@ -150,7 +178,7 @@ button[type="submit"], .add-form button {
   width: 100%;
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px solid rgba(255,255,255,0.08);
+  border-top: 1px solid var(--edge);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -163,7 +191,7 @@ button[type="submit"], .add-form button {
 .site-editor .lockout-min { width: 48px; }
 .site-editor select, .site-editor input[type="time"] {
   background: var(--panel); color: var(--text);
-  border: 1px solid rgba(255,255,255,0.12); border-radius: 6px;
+  border: 1px solid var(--edge); border-radius: 6px;
   padding: 4px 6px; font-size: 12px;
 }
 .site-editor .lockout-min[hidden] { display: none; }
@@ -177,7 +205,7 @@ button[type="submit"], .add-form button {
   gap: 6px;
   align-items: center;
   padding: 6px;
-  background: rgba(255,255,255,0.04);
+  background: var(--subtle);
   border-radius: 6px;
 }
 .rule-row .times { display: flex; align-items: center; gap: 4px; grid-column: 1 / -1; }
@@ -186,14 +214,14 @@ button[type="submit"], .add-form button {
 .days { display: flex; gap: 2px; }
 .day-toggle {
   width: 22px; height: 22px; padding: 0;
-  border-radius: 999px; border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 999px; border: 1px solid var(--edge);
   background: transparent; color: var(--muted); font-size: 10px; font-weight: 600; cursor: pointer;
 }
 .day-toggle[aria-pressed="true"] { background: var(--accent-dim); color: #fff; border-color: var(--accent-dim); }
 .rule-row .remove-rule { justify-self: end; }
 .add-rule {
   align-self: flex-start;
-  background: none; border: 1px dashed rgba(255,255,255,0.18); color: var(--muted);
+  background: none; border: 1px dashed var(--hover); color: var(--muted);
   border-radius: 6px; padding: 4px 8px; cursor: pointer; font-size: 12px;
 }
 .add-rule:hover { color: var(--text); border-color: var(--accent-dim); }

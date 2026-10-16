@@ -15,7 +15,7 @@ async function loadBackground(initialStorage) {
 
 function localTodayKey(ms = Date.now()) {
   const d = new Date(ms);
-  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 describe("background.js", () => {
@@ -45,7 +45,7 @@ describe("background.js", () => {
     // Must match what background.js's own todayKey() computes once the fake
     // clock is set to baseNow — not the real current date.
     const fakeToday = new Date(baseNow);
-    const todayKey = `${fakeToday.getFullYear()}-${fakeToday.getMonth() + 1}-${fakeToday.getDate()}`;
+    const todayKey = localTodayKey(fakeToday.getTime());
 
     const storage = createControllableStorage({
       focusSites: [{ domain: "youtube.com" }],
@@ -114,7 +114,7 @@ describe("background.js", () => {
   // https://github.com/dharshanag/focuscap/issues/3
   it("a rejected redirectToBlock() should not escape as an unhandled rejection", async () => {
     const today = new Date();
-    const todayKey = `${today.getFullYear()}-${today.getMonth() + 1}-${today.getDate()}`;
+    const todayKey = localTodayKey(today.getTime());
 
     const { bg, chrome, listeners } = await loadBackground({
       focusSites: [{ domain: "youtube.com" }],

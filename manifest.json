@@ -4,19 +4,41 @@
   "version": "0.1.0",
   "description": "Set a daily time limit for distracting sites, then get blocked until tomorrow.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq3uXjw+uqN9cUTerCcu9v2uiCkJ/Gg87sA6OH4b0HhRvwxjkrRmv9wZHpzco4o/q78KXFuymr8kZitW8S34kH+59V4go2JiFHgC8jfve0w3eJuoDiq2s0wpTxBE8R7Nd/wipi/aVnhbuWhM9jtXvJkf+E31F7xI2NGOr6d5h1zCar23cS1vWlHmXIVij0GqWozNA8/cJR7MaaJtH9izkVOmfzzRzNnxxWJ08/TIZ8k7qljY2KhGWKlcl3NXEzMi8gPDn8F81gL/JF1LaPDXxwXbFCWUzfZNZ4XRK0fUvGNjR15Q1CtIYGnhxVst1XOv21aG+HmQOaSk18sS4qQIInwIDAQAB",
-  "permissions": ["storage", "webNavigation", "nativeMessaging", "alarms"],
-  "host_permissions": ["<all_urls>"],
+  "permissions": [
+    "storage",
+    "webNavigation",
+    "nativeMessaging",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "action": {
     "default_popup": "dashboard.html",
-    "default_title": "Focus Cap"
+    "default_title": "Focus Cap",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
   },
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["shared.js", "content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "shared.js",
+        "content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     }

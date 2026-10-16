@@ -3,9 +3,12 @@
 // content_scripts entry (content scripts injected together share one global
 // scope), and as a <script> tag before dashboard.js in dashboard.html.
 
+// Local calendar day as a zero-padded "YYYY-MM-DD" key. Zero padding keeps
+// the keys lexically sortable, which the stats pruning relies on.
 function todayKey() {
   const d = new Date();
-  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 function fmtClock(ms) {

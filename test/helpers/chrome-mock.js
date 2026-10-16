@@ -20,7 +20,13 @@ export function createChromeMock(initialStorage = {}) {
   const chrome = {
     storage: {
       local: {
-        get: vi.fn((keys) => Promise.resolve(pick(store, keys))),
+        // Supports both the promise form and the callback form (theme.js
+        // uses the latter), like the real API.
+        get: vi.fn((keys, cb) => {
+          const result = pick(store, keys);
+          if (typeof cb === "function") cb(result);
+          return Promise.resolve(result);
+        }),
         set: vi.fn((obj) => {
           store = { ...store, ...clone(obj) };
           return Promise.resolve();

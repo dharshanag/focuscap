@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fmtClock, todayKey } from "../shared.js";
 
 describe("shared.js", () => {
@@ -24,12 +24,35 @@ describe("shared.js", () => {
   });
 
   describe("todayKey()", () => {
-    it("returns a string matching the YYYY-M-D pattern for the current date", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("returns a zero-padded YYYY-MM-DD key for the current local date", () => {
       const key = todayKey();
-      expect(key).toMatch(/^\d{4}-\d{1,2}-\d{1,2}$/);
+      expect(key).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 
       const now = new Date();
-      expect(key).toBe(`${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`);
+      const pad = (n) => String(n).padStart(2, "0");
+      expect(key).toBe(`${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`);
+    });
+
+    it("zero-pads single-digit months and days (2026-01-05, not 2026-1-5)", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 0, 5, 12, 0, 0));
+      expect(todayKey()).toBe("2026-01-05");
+
+      vi.setSystemTime(new Date(2026, 11, 25, 12, 0, 0));
+      expect(todayKey()).toBe("2026-12-25");
+    });
+
+    it("keys sort chronologically as plain strings (what stats pruning relies on)", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 8, 30, 12, 0, 0)); // Sep 30
+      const sep = todayKey();
+      vi.setSystemTime(new Date(2026, 9, 5, 12, 0, 0)); // Oct 5
+      const oct = todayKey();
+      expect([oct, sep].sort()).toEqual([sep, oct]);
     });
   });
 });

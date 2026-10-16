@@ -4,8 +4,18 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Time's up</title>
+    <script src="theme.js"></script>
     <style>
-      :root { color-scheme: dark; }
+      :root {
+        color-scheme: dark;
+        --text: #e7e7f0; --accent: #a78bfa; --green: #34d399;
+        --grad1: #1e1e2e; --grad2: #0b0b12;
+      }
+      :root[data-theme="light"] {
+        color-scheme: light;
+        --text: #1b1b26; --accent: #7c3aed; --green: #059669;
+        --grad1: #ffffff; --grad2: #e6e6ee;
+      }
       * { box-sizing: border-box; }
       html, body { height: 100%; margin: 0; }
       body {
@@ -16,12 +26,12 @@
         text-align: center;
         padding: 24px;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        color: #e7e7f0;
-        background: radial-gradient(circle at 50% 35%, #1e1e2e, #0b0b12);
+        color: var(--text);
+        background: radial-gradient(circle at 50% 35%, var(--grad1), var(--grad2));
       }
       .lock { font-size: 72px; margin-bottom: 18px; }
       h1 { font-size: 40px; font-weight: 800; margin: 0 0 14px; letter-spacing: -0.5px; }
-      .domain { color: #a78bfa; }
+      .domain { color: var(--accent); }
       p { font-size: 19px; opacity: 0.82; margin: 0; max-width: 520px; line-height: 1.55; }
       .reset {
         margin-top: 34px;
@@ -29,7 +39,7 @@
         opacity: 0.6;
         font-variant-numeric: tabular-nums;
       }
-      .reset b { color: #34d399; font-weight: 600; }
+      .reset b { color: var(--green); font-weight: 600; }
     </style>
   </head>
   <body>
