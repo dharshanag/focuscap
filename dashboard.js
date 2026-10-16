@@ -49,6 +49,9 @@ function fmtUntil(ms) {
 }
 
 function describeStatus(status) {
+  // Outside the global enforcement hours nothing is counted, so there's no
+  // countdown to show.
+  if (status.free) return "off-hours";
   if (!status.locked) return `${fmtClock(status.remainingMs)} left`;
   const until = status.until ? ` until ${fmtUntil(status.until)}` : "";
   switch (status.reason) {
@@ -82,14 +85,15 @@ const DAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 async function readModel() {
-  const store = await get(["focusSites", "settings", "usage", "budgetSeconds"]);
+  const store = await get(["focusSites", "settings", "usage", "budgetSeconds", "schedule"]);
   const now = Date.now();
   const budgetSeconds = store.budgetSeconds ?? DEFAULT_BUDGET_SECONDS;
   const globalBudgetMs = budgetSeconds * 1000;
   const usage = normalizeUsage(store.usage, now);
   const sites = (store.focusSites || []).map(normalizeSite);
-  const statuses = sites.map((s) => evaluateSite(s, usage, globalBudgetMs, now));
-  return { store, now, budgetSeconds, globalBudgetMs, usage, sites, statuses };
+  const schedule = store.schedule;
+  const statuses = sites.map((s) => evaluateSite(s, usage, globalBudgetMs, now, schedule));
+  return { store, now, budgetSeconds, globalBudgetMs, usage, sites, statuses, schedule };
 }
 
 async function load() {
@@ -160,6 +164,7 @@ function renderSites(sites, statuses, usage) {
     meta.className = "budget";
     meta.textContent = describeStatus(status);
     if (status.locked) meta.title = status.reason === "schedule" ? "Blocked by a schedule rule" : "Out of time";
+    else if (status.free) meta.title = "Outside your enforcement hours — time here isn't counted";
 
     const edit = document.createElement("button");
     edit.className = "edit";
@@ -496,10 +501,10 @@ el("statsBtn").addEventListener("click", openStats);
 // while a tracked site is open, and a full re-render would drop focus.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (!(changes.usage || changes.focusSites || changes.budgetSeconds)) return;
+  if (!(changes.usage || changes.focusSites || changes.budgetSeconds || changes.schedule)) return;
   const active = document.activeElement;
   const editing = active && typeof active.closest === "function" && active.closest(".site-editor");
-  if (changes.usage && !changes.focusSites && !changes.budgetSeconds && editing) return;
+  if (changes.usage && !changes.focusSites && !changes.budgetSeconds && !changes.schedule && editing) return;
   load();
 });
 

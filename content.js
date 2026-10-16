@@ -68,10 +68,11 @@
   }
 
   // The countdown badge belongs only on a tracked site that is actually being
-  // spent down — not on untracked pages (stats track those silently), and not
-  // on a locked page (background is already redirecting it away).
+  // spent down — not on untracked pages (stats track those silently), not on
+  // a locked page (background is already redirecting it away), and not
+  // off-hours (the global schedule isn't enforcing, so nothing is charged).
   function badgeWanted(res) {
-    return !!res.tracked && !res.overlay;
+    return !!res.tracked && !res.overlay && !res.free;
   }
 
   function syncBadge(res) {
@@ -118,7 +119,7 @@
     if (!badgeEl) return;
     let store;
     try {
-      store = await chrome.storage.local.get(["focusSites", "budgetSeconds", "usage"]);
+      store = await chrome.storage.local.get(["focusSites", "budgetSeconds", "usage", "schedule"]);
     } catch (_) {
       return; // extension context invalidated
     }
@@ -129,7 +130,13 @@
     const site = matchSite(hostname, sites);
     if (!site) return;
     const globalBudgetMs = (typeof store.budgetSeconds === "number" ? store.budgetSeconds : 1800) * 1000;
-    const status = evaluateSite(site, normalizeUsage(store.usage, now), globalBudgetMs, now);
+    const status = evaluateSite(site, normalizeUsage(store.usage, now), globalBudgetMs, now, store.schedule);
+    // Off-hours there's nothing to count down: the badge comes off, exactly
+    // as it would on the next heartbeat's free:true reply.
+    if (status.free) {
+      hideBadge();
+      return;
+    }
     updateBadge(status.locked ? 0 : status.remainingMs);
   }
 
@@ -202,15 +209,16 @@
   });
   window.addEventListener("focus", evaluate); // resume promptly on return
 
-  // React to dashboard changes (site list or daily budget edits).
+  // React to dashboard/options changes (site list, daily budget, or the
+  // global schedule): re-enter so the reply reflects the new rules.
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
-    if (changes.focusSites || changes.budgetSeconds) {
+    if (changes.focusSites || changes.budgetSeconds || changes.schedule) {
       stop();
       evaluate();
     }
-    // Keep the badge's countdown current as usage/budget changes.
-    if (changes.usage || changes.budgetSeconds) refreshBadge();
+    // Keep the badge's countdown current as usage/budget/schedule changes.
+    if (changes.usage || changes.budgetSeconds || changes.schedule) refreshBadge();
   });
 
   // Kick things off on load.

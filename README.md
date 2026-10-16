@@ -17,6 +17,14 @@ site once its rules say so.
     windows, it's blocked outside all of them; otherwise budgets decide.
 - One **total cap, all sites** on top: a global daily limit across every
   tracked site, whichever runs out first.
+- A **global schedule** over all of that (stored as `schedule`, off by
+  default = always on): *enforcement days/windows* outside of which every
+  site is free — the popup row reads "off-hours", no badge, nothing is
+  charged to any budget (daily stats still accrue) — and *blackouts* during
+  which every tracked site is blocked outright, whatever its budget. A
+  blackout outranks everything; a site's own block/allow rules outrank
+  off-hours. The editing UI for the global schedule arrives with the options
+  page; until then it's set in storage.
 - No session to start. The rules are always in force.
 - A small **countdown badge** in the corner of each listed site shows how much
   time *that site* has left today (amber under 2 min, red under 1 min).
@@ -72,7 +80,8 @@ Set "After limit" to "block for 1 min" to watch it unlock again.
 - `stats.html/.css/.js` — the daily stats page (totals, per-site list, 7-day
   trend, block suggestions).
 - `shared.js` — the pure per-site evaluation (`matchSite`, `normalizeSite`,
-  `normalizeUsage`, `evaluateSite`, schedule-rule helpers) plus small
+  `normalizeUsage`, `evaluateSite`, per-site schedule-rule helpers, the
+  global schedule's `scheduleStateAt` / `scheduleBlackoutUntil`) plus small
   formatting helpers, shared by background.js / content.js / dashboard.js so
   the popup, badge and enforcement can never disagree.
 - `time-is-up.html/.js` — the standalone block page you're redirected to; it

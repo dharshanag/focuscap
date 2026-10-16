@@ -118,6 +118,83 @@ function scheduleBlockedUntil(rules, date) {
   return soonest;
 }
 
+// ---- Global schedule: enforcement windows + blackouts ----
+// One schedule for the whole extension, layered OVER the per-site rules:
+//   { enabled, days: [0..6], windows: [{ start, end }], blackouts: [{ start, end, days }] }
+//   enforcing — budgets and per-site rules are live right now: an enforcement
+//               day AND (no windows = all day, or inside one of them)
+//   blackout  — every tracked site is off-limits right now, whatever its
+//               budget says (a blackout's empty `days` means every day)
+// A disabled/absent schedule means "always enforce, never blackout".
+
+const SCHED_DAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const SCHEDULE_DEFAULTS = { enabled: false, days: [0, 1, 2, 3, 4, 5, 6], windows: [], blackouts: [] };
+
+// "HH:MM" -> minutes since midnight. Lenient: a missing or unparseable part
+// counts as 0, so a malformed window degrades to 00:00 rather than throwing.
+function schedToMin(hhmm) {
+  const [h, m] = String(hhmm || "0:0")
+    .split(":")
+    .map((part) => {
+      const n = parseInt(part, 10);
+      return Number.isNaN(n) ? 0 : n;
+    });
+  return h * 60 + m;
+}
+
+// Is `mins` (minutes since midnight) inside [start, end)? Supports overnight
+// ranges where start > end (22:00-06:00). start === end is an empty range.
+function schedInRange(mins, start, end) {
+  const s = schedToMin(start);
+  const e = schedToMin(end);
+  if (s === e) return false;
+  return s < e ? mins >= s && mins < e : mins >= s || mins < e;
+}
+
+function schedList(list) {
+  return Array.isArray(list) ? list.filter((x) => x && typeof x === "object") : [];
+}
+
+function schedBlackoutMatches(b, day, mins) {
+  const days = Array.isArray(b.days) && b.days.length ? b.days : null;
+  return (days ? days.includes(day) : true) && schedInRange(mins, b.start, b.end);
+}
+
+// { enforcing, blackout } for the schedule at `date` (default: now).
+function scheduleStateAt(schedule, date) {
+  const now = date === undefined ? new Date() : new Date(date);
+  if (!schedule || !schedule.enabled) return { enforcing: true, blackout: false };
+  const day = now.getDay();
+  const mins = now.getHours() * 60 + now.getMinutes();
+  const days = Array.isArray(schedule.days) && schedule.days.length ? schedule.days : SCHEDULE_DEFAULTS.days;
+  const windows = schedList(schedule.windows);
+  const blackouts = schedList(schedule.blackouts);
+  const blackout = blackouts.some((b) => schedBlackoutMatches(b, day, mins));
+  const enforcing = days.includes(day) && (windows.length === 0 || windows.some((w) => schedInRange(mins, w.start, w.end)));
+  return { enforcing, blackout };
+}
+
+// Absolute ms at which the blackout active at `date` ends — the latest end
+// among every blackout matching right now; an overnight blackout entered
+// before midnight ends tomorrow. null when no blackout is active.
+function scheduleBlackoutUntil(schedule, date) {
+  const now = date === undefined ? new Date() : new Date(date);
+  if (!schedule || !schedule.enabled) return null;
+  const day = now.getDay();
+  const mins = now.getHours() * 60 + now.getMinutes();
+  const base = startOfDay(now).getTime();
+  let latest = null;
+  for (const b of schedList(schedule.blackouts)) {
+    if (!schedBlackoutMatches(b, day, mins)) continue;
+    const s = schedToMin(b.start);
+    const e = schedToMin(b.end);
+    const endsTomorrow = s > e && mins >= s;
+    const endMs = base + e * 60 * 1000 + (endsTomorrow ? DAY_MS : 0);
+    if (latest === null || endMs > latest) latest = endMs;
+  }
+  return latest;
+}
+
 // ---- Per-site evaluation (shared by background.js enforcement, the popup, and the badge) ----
 
 // Match a page hostname against the user's distraction list.
@@ -192,34 +269,58 @@ function lockoutEndFor(site, now) {
 }
 
 // Decide whether a site is currently locked and why. Order:
-//   1. schedule (block window active, or outside every allow window)
-//   2. an in-progress cool-down lockout
-//   3. this site's own daily budget
-//   4. the global cap across all sites
-// Returns { locked, reason, until, remainingMs, budgetMs } where budgetMs /
-// remainingMs reflect the tighter of the site's and the global allowance.
-function evaluateSite(site, usage, globalBudgetMs, now) {
+//   0. a global blackout (reason "schedule", until the blackout ends)
+//   1. this site's own schedule rules (block window active, or outside every
+//      allow window)
+//   2. off-hours: outside the global enforcement windows / on a non-enforce
+//      day the site is free — not locked, nothing accrues
+//   3. an in-progress cool-down lockout
+//   4. this site's own daily budget
+//   5. the global cap across all sites
+// Returns { locked, free, reason, until, remainingMs, budgetMs } where
+// budgetMs / remainingMs reflect the tighter of the site's and the global
+// allowance. `free` is true only for the off-hours case, where remainingMs
+// is the full allowance (time spent off-hours is never charged).
+// `schedule` is the global schedule (absent = always enforcing).
+function evaluateSite(site, usage, globalBudgetMs, now, schedule) {
   const rec = siteUsage(usage, site.domain);
   const siteBudgetMs = site.budgetSeconds * 1000;
   const remainingSite = Math.max(0, siteBudgetMs - rec.totalMs);
   const remainingGlobal = Math.max(0, globalBudgetMs - usage.totalMs);
   const remainingMs = Math.min(remainingSite, remainingGlobal);
   const budgetMs = Math.min(siteBudgetMs, globalBudgetMs);
+  const at = new Date(now);
 
-  const verdict = scheduleVerdict(site.rules, new Date(now));
+  const global = scheduleStateAt(schedule, at);
+  if (global.blackout) {
+    return { locked: true, free: false, reason: "schedule", until: scheduleBlackoutUntil(schedule, at), remainingMs, budgetMs };
+  }
+  const verdict = scheduleVerdict(site.rules, at);
   if (verdict === "block") {
-    return { locked: true, reason: "schedule", until: scheduleBlockedUntil(site.rules, new Date(now)), remainingMs, budgetMs };
+    return { locked: true, free: false, reason: "schedule", until: scheduleBlockedUntil(site.rules, at), remainingMs, budgetMs };
+  }
+  if (!global.enforcing) {
+    return { locked: false, free: true, reason: null, until: null, remainingMs: budgetMs, budgetMs };
   }
   if (typeof rec.lockedUntil === "number" && now < rec.lockedUntil) {
-    return { locked: true, reason: "lockout", until: rec.lockedUntil, remainingMs: 0, budgetMs };
+    return { locked: true, free: false, reason: "lockout", until: rec.lockedUntil, remainingMs: 0, budgetMs };
   }
   if (rec.totalMs >= siteBudgetMs) {
-    return { locked: true, reason: "budget", until: lockoutEndFor(site, now), remainingMs: 0, budgetMs };
+    return { locked: true, free: false, reason: "budget", until: lockoutEndFor(site, now), remainingMs: 0, budgetMs };
   }
   if (usage.totalMs >= globalBudgetMs) {
-    return { locked: true, reason: "global", until: nextLocalMidnightMs(now), remainingMs: 0, budgetMs };
+    return { locked: true, free: false, reason: "global", until: nextLocalMidnightMs(now), remainingMs: 0, budgetMs };
   }
-  return { locked: false, reason: null, until: null, remainingMs, budgetMs };
+  return { locked: false, free: false, reason: null, until: null, remainingMs, budgetMs };
+}
+
+// Should a heartbeat on this site charge its budget right now? Not during a
+// global blackout, not off-hours, and not while a per-site block window is
+// active (the redirect is in flight — that time shouldn't eat into today).
+function usageAccrues(site, now, schedule) {
+  const at = new Date(now);
+  const global = scheduleStateAt(schedule, at);
+  return global.enforcing && !global.blackout && scheduleVerdict(site.rules, at) !== "block";
 }
 
 if (typeof module !== "undefined" && module.exports) {
@@ -231,6 +332,11 @@ if (typeof module !== "undefined" && module.exports) {
     ruleActiveAt,
     scheduleVerdict,
     scheduleBlockedUntil,
+    SCHED_DAY_ABBR,
+    SCHEDULE_DEFAULTS,
+    scheduleStateAt,
+    scheduleBlackoutUntil,
+    usageAccrues,
     matchSite,
     SITE_DEFAULTS,
     nextLocalMidnightMs,

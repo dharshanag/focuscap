@@ -1060,3 +1060,223 @@ describe("background.js per-domain stats", () => {
     expect(bg.DEFAULTS.settings).toEqual({ idleEnabled: true, idleSeconds: 45 });
   });
 });
+
+// --- Global schedule (main's enforcement windows + blackouts) layered over
+// the per-site rules: a blackout outranks everything; off-hours nothing is
+// charged to any budget (stats still accrue). ---
+describe("background.js global schedule", () => {
+  afterEach(() => {
+    cancelStatsTimers();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  const allDays = [0, 1, 2, 3, 4, 5, 6];
+  const WED = (h, m = 0, s = 0) => new Date(2026, 0, 14, h, m, s); // Wed Jan 14 2026
+  function fixedClock(date) {
+    vi.useFakeTimers();
+    vi.setSystemTime(date);
+  }
+  async function beat(bg, hostname, seconds) {
+    let res;
+    for (let i = 0; i < seconds; i++) {
+      vi.setSystemTime(Date.now() + 1000);
+      res = await bg.handle({ type: "heartbeat", hostname });
+    }
+    return res;
+  }
+  function captureHost(chrome) {
+    const posted = [];
+    chrome.runtime.connectNative = () => ({ postMessage: (m) => posted.push(m), onDisconnect: { addListener: () => {} } });
+    return posted;
+  }
+
+  const blackoutNoon = { enabled: true, days: allDays, windows: [], blackouts: [{ start: "09:00", end: "11:00" }] };
+  const officeHours = { enabled: true, days: allDays, windows: [{ start: "09:00", end: "17:00" }], blackouts: [] };
+
+  it("a blackout outranks an allow window, a cool-down and a full budget: reason 'schedule' until the blackout ends, no cool-down started", async () => {
+    fixedClock(WED(10));
+    const { bg, chrome, getStore } = await loadBackground({
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 3600, lockoutSeconds: 600, rules: [{ type: "allow", days: [3], start: "08:00", end: "20:00" }] }],
+      budgetSeconds: 3600,
+      usage: { date: localTodayKey(), totalMs: 0, sites: { "youtube.com": { totalMs: 0, lockedUntil: WED(10, 30).getTime() } } },
+      schedule: blackoutNoon
+    });
+    const res = await bg.handle({ type: "entering", hostname: "youtube.com" });
+    expect(res.tracked).toBe(true);
+    expect(res.overlay).toBe(true);
+    expect(res.free).toBe(false);
+    expect(res.reason).toBe("schedule");
+    expect(res.until).toBe(WED(11).getTime());
+    // The in-progress cool-down is untouched (still the earlier time), and no
+    // budget lockout was started by the blackout.
+    expect(getStore().usage.sites["youtube.com"].lockedUntil).toBe(WED(10, 30).getTime());
+    expect(chrome.alarms.create).toHaveBeenCalledWith("unlock:youtube.com", { when: WED(11).getTime() });
+  });
+
+  it("heartbeats during a blackout accrue stats but neither site nor global usage", async () => {
+    fixedClock(WED(10));
+    const { bg, getStore } = await loadBackground({
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 3600 }],
+      budgetSeconds: 3600,
+      schedule: blackoutNoon
+    });
+    await bg.handle({ type: "entering", hostname: "youtube.com" });
+    const res = await beat(bg, "youtube.com", 3);
+    expect(res.overlay).toBe(true);
+    expect(res.reason).toBe("schedule");
+    await bg.handle({ type: "leaving", hostname: "youtube.com" });
+    const store = getStore();
+    expect(store.usage.sites["youtube.com"].totalMs).toBe(0);
+    expect(store.usage.totalMs).toBe(0);
+    expect(store.stats[localTodayKey()]).toEqual({ "youtube.com": 3000 });
+  });
+
+  it("the companion snapshot carries every site locked with reason 'schedule' during a blackout", async () => {
+    fixedClock(WED(10));
+    const { bg, chrome } = await loadBackground({
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 600 }, { domain: "reddit.com", budgetSeconds: 120 }],
+      budgetSeconds: 3600,
+      schedule: blackoutNoon
+    });
+    const posted = captureHost(chrome);
+    await bg.handle({ type: "entering", hostname: "youtube.com" });
+    const snap = posted[posted.length - 1];
+    expect(snap.locked).toBe(true);
+    expect(snap.sites["youtube.com"]).toEqual({ locked: true, reason: "schedule", until: WED(11).getTime(), remainingMs: 600_000 });
+    expect(snap.sites["reddit.com"]).toEqual({ locked: true, reason: "schedule", until: WED(11).getTime(), remainingMs: 120_000 });
+
+    // The alarm-driven snapshot (pushSnapshot) reads the schedule too.
+    const alarmSnap = await bg.pushSnapshot();
+    expect(alarmSnap.sites["reddit.com"].reason).toBe("schedule");
+  });
+
+  it("guardNavigation() redirects to the block page during a blackout, recording reason and until", async () => {
+    fixedClock(WED(10));
+    const { bg, chrome, getStore } = await loadBackground({
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 3600 }],
+      budgetSeconds: 3600,
+      schedule: blackoutNoon
+    });
+    const status = await bg.isLocked("m.youtube.com");
+    expect(status.locked).toBe(true);
+    expect(status.reason).toBe("schedule");
+
+    await bg.guardNavigation({ frameId: 0, tabId: 5, url: "https://m.youtube.com/watch?v=1" });
+    expect(chrome.tabs.update).toHaveBeenCalledWith(5, { url: expect.stringContaining("time-is-up.html") });
+    expect(getStore().lastBlocked).toBe("m.youtube.com");
+    expect(getStore().lastBlockedReason).toBe("schedule");
+    expect(getStore().lastBlockedUntil).toBe(WED(11).getTime());
+    expect(chrome.alarms.create).toHaveBeenCalledWith("unlock:youtube.com", { when: WED(11).getTime() });
+
+    // Once the blackout is over the same navigation sails through.
+    vi.setSystemTime(WED(11));
+    chrome.tabs.update.mockClear();
+    await bg.guardNavigation({ frameId: 0, tabId: 5, url: "https://m.youtube.com/watch?v=1" });
+    expect(chrome.tabs.update).not.toHaveBeenCalled();
+  });
+
+  it("off-hours a tracked site is free (not locked, full allowance) and heartbeats charge nothing — stats still accrue", async () => {
+    fixedClock(WED(20));
+    const { bg, chrome, getStore } = await loadBackground({
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 600 }],
+      budgetSeconds: 3600,
+      usage: { date: localTodayKey(), totalMs: 60_000, sites: { "youtube.com": { totalMs: 60_000 } } },
+      schedule: officeHours
+    });
+    const posted = captureHost(chrome);
+    const enter = await bg.handle({ type: "entering", hostname: "youtube.com" });
+    expect(enter.tracked).toBe(true);
+    expect(enter.overlay).toBe(false);
+    expect(enter.free).toBe(true);
+    expect(enter.remainingMs).toBe(600_000);
+    const res = await beat(bg, "youtube.com", 4);
+    expect(res.free).toBe(true);
+    expect(res.overlay).toBe(false);
+    await bg.handle({ type: "leaving", hostname: "youtube.com" });
+
+    const store = getStore();
+    expect(store.usage.sites["youtube.com"].totalMs).toBe(60_000);
+    expect(store.usage.totalMs).toBe(60_000);
+    expect(store.stats[localTodayKey()]).toEqual({ "youtube.com": 4000 });
+    expect(chrome.tabs.update).not.toHaveBeenCalled();
+    const snap = posted[posted.length - 1];
+    expect(snap.locked).toBe(false);
+    expect(snap.sites["youtube.com"]).toEqual({ locked: false, reason: null, until: null, remainingMs: 600_000 });
+    // Off-hours never navigates to the block page either.
+    await bg.guardNavigation({ frameId: 0, tabId: 1, url: "https://youtube.com/" });
+    expect(chrome.tabs.update).not.toHaveBeenCalled();
+  });
+
+  it("off-hours a site whose budget is already spent is still free (no lock, no redirect)", async () => {
+    fixedClock(WED(20));
+    const { bg, chrome } = await loadBackground({
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 60 }],
+      budgetSeconds: 3600,
+      usage: { date: localTodayKey(), totalMs: 60_000, sites: { "youtube.com": { totalMs: 60_000 } } },
+      schedule: officeHours
+    });
+    const res = await bg.handle({ type: "entering", hostname: "youtube.com" });
+    expect(res.overlay).toBe(false);
+    expect(res.free).toBe(true);
+    await bg.guardNavigation({ frameId: 0, tabId: 1, url: "https://youtube.com/" });
+    expect(chrome.tabs.update).not.toHaveBeenCalled();
+  });
+
+  it("once the enforcement window opens again, accrual resumes from that moment (off-hours seconds are never back-charged)", async () => {
+    fixedClock(WED(8, 59, 56));
+    const { bg, getStore } = await loadBackground({
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 600 }],
+      budgetSeconds: 3600,
+      schedule: officeHours
+    });
+    await bg.handle({ type: "entering", hostname: "youtube.com" });
+    const off = await beat(bg, "youtube.com", 3); // 08:59:57 .. 08:59:59
+    expect(off.free).toBe(true);
+    expect(getStore().usage.totalMs).toBe(0);
+
+    const on = await beat(bg, "youtube.com", 2); // 09:00:00, 09:00:01
+    expect(on.free).toBe(false);
+    expect(on.overlay).toBe(false);
+    expect(on.remainingMs).toBe(598_000);
+    expect(getStore().usage.sites["youtube.com"].totalMs).toBe(2000);
+    expect(getStore().usage.totalMs).toBe(2000);
+  });
+
+  it("a per-site block window still locks the site off-hours (per-site rules outrank 'free')", async () => {
+    fixedClock(WED(20));
+    const { bg } = await loadBackground({
+      focusSites: [{ domain: "youtube.com", rules: [{ type: "block", days: [3], start: "19:00", end: "21:00" }] }],
+      budgetSeconds: 3600,
+      schedule: officeHours
+    });
+    const res = await bg.handle({ type: "entering", hostname: "youtube.com" });
+    expect(res.overlay).toBe(true);
+    expect(res.free).toBe(false);
+    expect(res.reason).toBe("schedule");
+    expect(res.until).toBe(WED(21).getTime());
+  });
+
+  it("a disabled schedule (the default) changes nothing: replies say free:false and budgets apply", async () => {
+    fixedClock(WED(20));
+    const { bg, getStore } = await loadBackground({
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 600 }],
+      budgetSeconds: 3600,
+      schedule: { ...officeHours, enabled: false }
+    });
+    await bg.handle({ type: "entering", hostname: "youtube.com" });
+    const res = await beat(bg, "youtube.com", 2);
+    expect(res.free).toBe(false);
+    expect(getStore().usage.totalMs).toBe(2000);
+  });
+
+  it("onInstalled seeds the disabled default schedule without clobbering a stored one", async () => {
+    const fresh = await loadBackground({});
+    await fresh.listeners.onInstalled[0]();
+    expect(fresh.getStore().schedule).toEqual({ enabled: false, days: allDays, windows: [], blackouts: [] });
+
+    const kept = await loadBackground({ schedule: officeHours });
+    await kept.listeners.onInstalled[0]();
+    expect(kept.getStore().schedule).toEqual(officeHours);
+  });
+});

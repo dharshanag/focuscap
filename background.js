@@ -21,17 +21,22 @@ if (typeof importScripts === "function") importScripts("shared.js");
 //   stats: { "YYYY-MM-DD": { [domain]: ms } } — engaged time on EVERY page
 //     (tracked or not), keyed by hostname with a leading "www." stripped,
 //     lowercased; pruned to the most recent STATS_DAYS day keys on each write.
+//   schedule: { enabled, days, windows, blackouts } — the GLOBAL schedule
+//     layered over every site's own rules (see shared.js): a blackout locks
+//     every tracked site outright; outside the enforcement windows sites are
+//     free and nothing is charged to any budget. Disabled = always enforcing.
 //
 // The pure evaluation logic (SITE_DEFAULTS, normalizeSite, normalizeUsage,
-// siteUsage, evaluateSite, nextLocalMidnightMs) lives in shared.js so the
-// popup renders exactly the status this worker enforces.
+// siteUsage, evaluateSite, scheduleStateAt, nextLocalMidnightMs) lives in
+// shared.js so the popup renders exactly the status this worker enforces.
 
 const DEFAULTS = {
   focusSites: [],
   settings: { idleEnabled: true, idleSeconds: 45 },
   budgetSeconds: 1800, // global daily cap across all sites (default 30 min)
   usage: { date: "", totalMs: 0, sites: {} },
-  stats: {} // per-day, per-domain engaged time (see storage layout above)
+  stats: {}, // per-day, per-domain engaged time (see storage layout above)
+  schedule: SCHEDULE_DEFAULTS // global enforcement windows + blackouts; off = always on
 };
 
 const STATS_DAYS = 14; // how many days of stats history to keep
@@ -172,13 +177,14 @@ chrome.runtime.onStartup.addListener(scheduleMidnightAlarm);
 
 // Per-site lock snapshot for the companion app. `locked` is true if ANY site
 // is locked; `sites` carries each site's own state so the companion can say
-// which ones, and until when.
-function snapshotForHost(focusSites, usage, globalBudgetMs, now) {
+// which ones, and until when. A global blackout shows up here as every site
+// locked with reason "schedule".
+function snapshotForHost(focusSites, usage, globalBudgetMs, now, schedule) {
   const sites = {};
   let anyLocked = false;
   let minRemaining = globalBudgetMs;
   for (const site of focusSites) {
-    const s = evaluateSite(site, usage, globalBudgetMs, now);
+    const s = evaluateSite(site, usage, globalBudgetMs, now, schedule);
     sites[site.domain] = { locked: s.locked, reason: s.reason, until: s.until, remainingMs: s.remainingMs };
     if (s.locked) anyLocked = true;
     if (s.remainingMs < minRemaining) minRemaining = s.remainingMs;
@@ -202,7 +208,7 @@ function pushSnapshot(extra) {
 }
 
 async function pushSnapshotLocked(extra) {
-  const stored = await get(["focusSites", "usage", "budgetSeconds"]);
+  const stored = await get(["focusSites", "usage", "budgetSeconds", "schedule"]);
   const now = Date.now();
   const focusSites = (stored.focusSites || []).map(normalizeSite);
   const globalBudgetMs = (stored.budgetSeconds ?? DEFAULTS.budgetSeconds) * 1000;
@@ -210,7 +216,7 @@ async function pushSnapshotLocked(extra) {
   // normalizeUsage() hands an expired cool-down a fresh allowance; persist
   // that so the reset is durable rather than recomputed on every read.
   await set({ usage });
-  const snap = snapshotForHost(focusSites, usage, globalBudgetMs, now);
+  const snap = snapshotForHost(focusSites, usage, globalBudgetMs, now, stored.schedule);
   // A site may still be locked for a different reason with a later end (a
   // cool-down ended while a schedule window is active) — keep the companion
   // informed of that next unlock too.
@@ -298,15 +304,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // Is this hostname's site currently locked? (read-only; same rules as handle)
 async function isLocked(hostname) {
-  const stored = await get(["focusSites", "usage", "budgetSeconds"]);
+  const stored = await get(["focusSites", "usage", "budgetSeconds", "schedule"]);
   const focusSites = (stored.focusSites || []).map(normalizeSite);
   const site = matchSite(hostname, focusSites);
   if (!site) return { locked: false, site: null, focusSites };
   const now = Date.now();
   const usage = normalizeUsage(stored.usage, now);
   const globalBudgetMs = (stored.budgetSeconds ?? DEFAULTS.budgetSeconds) * 1000;
-  const status = evaluateSite(site, usage, globalBudgetMs, now);
-  return { ...status, site, focusSites, usage, globalBudgetMs, now };
+  const schedule = stored.schedule;
+  const status = evaluateSite(site, usage, globalBudgetMs, now, schedule);
+  return { ...status, site, focusSites, usage, globalBudgetMs, now, schedule };
 }
 
 // Redirect a main-frame navigation to a locked site to the blocked page —
@@ -335,7 +342,7 @@ async function guardNavigation(details) {
   armUnlock(status.site, status);
   // No heartbeat will follow a navigation-time block, so push the per-site
   // snapshot here too.
-  notifyNativeHost(snapshotForHost(status.focusSites, status.usage, status.globalBudgetMs, status.now));
+  notifyNativeHost(snapshotForHost(status.focusSites, status.usage, status.globalBudgetMs, status.now, status.schedule));
   await redirectToBlock(details.tabId, hostname, status);
 }
 
@@ -356,10 +363,11 @@ async function handle(msg) {
 }
 
 async function handleLocked(msg) {
-  const stored = await get(["focusSites", "settings", "usage", "budgetSeconds", "stats"]);
+  const stored = await get(["focusSites", "settings", "usage", "budgetSeconds", "stats", "schedule"]);
   const focusSites = (stored.focusSites || []).map(normalizeSite);
   const settings = { ...DEFAULTS.settings, ...(stored.settings || {}) };
   const globalBudgetMs = (stored.budgetSeconds ?? DEFAULTS.budgetSeconds) * 1000;
+  const schedule = stored.schedule;
   const now = Date.now();
   const usage = normalizeUsage(stored.usage, now);
 
@@ -367,12 +375,15 @@ async function handleLocked(msg) {
   const site = matchSite(msg.hostname, focusSites);
 
   // Every page is told to keep heartbeating (that feeds the stats); `tracked`
-  // says whether this page is on the distraction list (budget + badge).
+  // says whether this page is on the distraction list (budget + badge);
+  // `free` says the global schedule isn't enforcing right now (off-hours), so
+  // nothing is being charged and the badge stays hidden.
   const untracked = () => ({ track: true, tracked: false, overlay: false, settings });
   const respond = (status) => ({
     track: true,
     tracked: true,
     overlay: status.locked,
+    free: !!status.free,
     reason: status.reason,
     until: status.until,
     remainingMs: status.remainingMs,
@@ -390,11 +401,11 @@ async function handleLocked(msg) {
     if (!site) return untracked(); // stats only — usage is never touched
     const rec = siteUsage(usage, site.domain);
     rec.lastTickAt = now;
-    const status = evaluateSite(site, usage, globalBudgetMs, now);
+    const status = evaluateSite(site, usage, globalBudgetMs, now, schedule);
     if (status.locked && status.reason === "budget") rec.lockedUntil = status.until;
     await set({ usage });
     armUnlock(site, status);
-    notifyNativeHost(snapshotForHost(focusSites, usage, globalBudgetMs, now));
+    notifyNativeHost(snapshotForHost(focusSites, usage, globalBudgetMs, now, schedule));
     return respond(status);
   }
 
@@ -423,20 +434,21 @@ async function handleLocked(msg) {
     // Budget/usage accrual for tracked sites (unchanged by the stats work).
     const rec = siteUsage(usage, site.domain);
     const delta = Math.min(now - (rec.lastTickAt || now), TICK_CAP_MS);
-    // Time spent while the schedule already blocks the site (the redirect is
-    // in flight) shouldn't eat into today's budget.
-    if (scheduleVerdict(site.rules, new Date(now)) !== "block") {
+    // Time spent off-hours, during a global blackout, or while a per-site
+    // block window already locks the site (the redirect is in flight)
+    // shouldn't eat into today's budget. Stats (above) accrue regardless.
+    if (usageAccrues(site, now, schedule)) {
       rec.totalMs += delta;
       usage.totalMs += delta;
     }
     rec.lastTickAt = now;
-    const status = evaluateSite(site, usage, globalBudgetMs, now);
+    const status = evaluateSite(site, usage, globalBudgetMs, now, schedule);
     // Exhausting the site's own budget starts its cool-down clock.
     if (status.locked && status.reason === "budget") rec.lockedUntil = status.until;
     patch.usage = usage;
     await set(patch); // one write: usage, plus stats when a flush is due
     armUnlock(site, status);
-    notifyNativeHost(snapshotForHost(focusSites, usage, globalBudgetMs, now));
+    notifyNativeHost(snapshotForHost(focusSites, usage, globalBudgetMs, now, schedule));
     return respond(status);
   }
 
@@ -460,6 +472,8 @@ if (typeof module !== "undefined" && module.exports) {
     normalizeSite,
     normalizeUsage,
     evaluateSite,
+    scheduleStateAt,
+    scheduleBlackoutUntil,
     isLocked,
     redirectToBlock,
     guardNavigation,

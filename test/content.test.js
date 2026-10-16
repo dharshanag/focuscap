@@ -323,3 +323,121 @@ describe("content.js engagement policy", () => {
     expect(sentTypes(chrome).filter((t) => t === "heartbeat")).toHaveLength(0);
   });
 });
+
+// --- Global schedule: off-hours (reply free:true) means no badge, while the
+// loop keeps heartbeating for stats. ---
+describe("content.js off-hours (global schedule)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function fakeClock(date = new Date(2026, 0, 14, 20, 0, 0)) {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    vi.setSystemTime(date); // Wed Jan 14 2026, 20:00 unless told otherwise
+  }
+
+  function setVisibility(state) {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+  }
+
+  const reply = (over = {}) => ({ track: true, tracked: true, overlay: false, free: false, settings: { idleEnabled: true, idleSeconds: 45 }, ...over });
+  const sentTypes = (chrome) => chrome.runtime.sendMessage.mock.calls.map(([m]) => m.type);
+
+  // Built lazily so usage.date matches the FAKE clock's day, not the real one.
+  const storage = () => ({
+    focusSites: [{ domain: "localhost", budgetSeconds: 600 }],
+    budgetSeconds: 3600,
+    usage: { date: localTodayKey(), totalMs: 60_000, sites: { localhost: { totalMs: 60_000 } } }
+  });
+  const officeHours = { enabled: true, days: [0, 1, 2, 3, 4, 5, 6], windows: [{ start: "09:00", end: "17:00" }], blackouts: [] };
+
+  async function loadWithReply(res, store = storage()) {
+    const loaded = await loadContent(store);
+    loaded.chrome.runtime.sendMessage.mockImplementation(() => Promise.resolve(res));
+    loaded.content.evaluate();
+    await flush();
+    return loaded;
+  }
+
+  it("a tracked site told free:true runs the loop (stats) but shows no badge", async () => {
+    fakeClock();
+    setVisibility("visible");
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const { content, chrome } = await loadWithReply(reply({ free: true }));
+    expect(content.isRunning()).toBe(true);
+    expect(content.badgeText()).toBeNull();
+
+    window.dispatchEvent(new Event("mousemove"));
+    vi.advanceTimersByTime(1000);
+    await flush();
+    expect(sentTypes(chrome).filter((t) => t === "heartbeat")).toHaveLength(1);
+    expect(content.badgeText()).toBeNull();
+  });
+
+  it("the badge clears on the heartbeat that first reports free:true, and comes back once enforcing resumes", async () => {
+    fakeClock();
+    setVisibility("visible");
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const { content, chrome } = await loadWithReply(reply());
+    expect(content.badgeText()).toBe("9:00");
+
+    chrome.runtime.sendMessage.mockImplementation(() => Promise.resolve(reply({ free: true })));
+    window.dispatchEvent(new Event("mousemove"));
+    vi.advanceTimersByTime(1000);
+    await flush();
+    expect(content.badgeText()).toBeNull();
+
+    chrome.runtime.sendMessage.mockImplementation(() => Promise.resolve(reply()));
+    vi.advanceTimersByTime(1000);
+    await flush();
+    expect(content.badgeText()).toBe("9:00");
+  });
+
+  it("refreshBadge() computes 'free' from the stored schedule and hides the badge off-hours (storage, not the reply, is the truth)", async () => {
+    fakeClock(new Date(2026, 0, 14, 20, 0, 0)); // outside 09:00-17:00
+    const { content } = await loadContent({ ...storage(), schedule: officeHours });
+    content.showBadge();
+    await content.refreshBadge();
+    expect(content.badgeText()).toBeNull();
+  });
+
+  it("refreshBadge() inside the enforcement window shows the countdown as usual; a disabled schedule changes nothing", async () => {
+    fakeClock(new Date(2026, 0, 14, 12, 0, 0));
+    const inHours = await loadContent({ ...storage(), schedule: officeHours });
+    inHours.content.showBadge();
+    await inHours.content.refreshBadge();
+    expect(inHours.content.badgeText()).toBe("9:00");
+
+    vi.setSystemTime(new Date(2026, 0, 14, 20, 0, 0));
+    const disabled = await loadContent({ ...storage(), schedule: { ...officeHours, enabled: false } });
+    disabled.content.showBadge();
+    await disabled.content.refreshBadge();
+    expect(disabled.content.badgeText()).toBe("9:00");
+  });
+
+  it("a global blackout shows 0:00 on the badge like any other lock (the redirect is in flight)", async () => {
+    fakeClock(new Date(2026, 0, 14, 12, 0, 0));
+    const { content } = await loadContent({
+      ...storage(),
+      schedule: { enabled: true, days: [0, 1, 2, 3, 4, 5, 6], windows: [], blackouts: [{ start: "11:00", end: "13:00" }] }
+    });
+    content.showBadge();
+    await content.refreshBadge();
+    expect(content.badgeText()).toBe("0:00");
+  });
+
+  it("a schedule change in storage re-enters the page so the reply reflects the new rules", async () => {
+    fakeClock();
+    setVisibility("visible");
+    const { content, chrome, listeners } = await loadWithReply(reply());
+    expect(content.badgeText()).toBe("9:00");
+    chrome.runtime.sendMessage.mockImplementation(() => Promise.resolve(reply({ free: true })));
+    listeners.onChanged.forEach((fn) => fn({ schedule: { newValue: officeHours } }, "local"));
+    await flush();
+    expect(sentTypes(chrome)).toContain("leaving");
+    expect(content.isRunning()).toBe(true);
+    expect(content.badgeText()).toBeNull();
+  });
+});

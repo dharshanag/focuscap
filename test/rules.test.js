@@ -133,3 +133,200 @@ describe("shared.js schedule rules", () => {
     });
   });
 });
+
+// --- Global schedule (main's model): enforcement windows + blackouts, layered
+// over the per-site rules above. Semantics ported from main's schedule.js. ---
+describe("shared.js global schedule", () => {
+  const SAT = 3; // day offset from Wed Jan 14 -> Sat Jan 17 (getDay() 6)
+  const THU = 1; // -> Thu Jan 15 (getDay() 4)
+  const allDays = [0, 1, 2, 3, 4, 5, 6];
+  const enabled = (over = {}) => ({ enabled: true, days: allDays, windows: [], blackouts: [], ...over });
+
+  describe("scheduleStateAt()", () => {
+    it("a disabled or absent schedule always enforces and never blacks out (the 24/7 default)", () => {
+      expect(shared.scheduleStateAt(undefined, at(12))).toEqual({ enforcing: true, blackout: false });
+      expect(shared.scheduleStateAt(null, at(12))).toEqual({ enforcing: true, blackout: false });
+      expect(shared.scheduleStateAt(shared.SCHEDULE_DEFAULTS, at(12))).toEqual({ enforcing: true, blackout: false });
+      // Even a blackout that would match right now is inert while disabled.
+      const off = { enabled: false, days: [], windows: [], blackouts: [{ start: "00:00", end: "23:59" }] };
+      expect(shared.scheduleStateAt(off, at(12))).toEqual({ enforcing: true, blackout: false });
+    });
+
+    it("enforces only on the listed days when there are no windows (all day on those days)", () => {
+      const weekdays = enabled({ days: [1, 2, 3, 4, 5] });
+      expect(shared.scheduleStateAt(weekdays, at(0, 0))).toEqual({ enforcing: true, blackout: false });
+      expect(shared.scheduleStateAt(weekdays, at(23, 59))).toEqual({ enforcing: true, blackout: false });
+      expect(shared.scheduleStateAt(weekdays, at(12, 0, SAT))).toEqual({ enforcing: false, blackout: false });
+    });
+
+    it("an empty days list means every day (main's fallback), not never", () => {
+      expect(shared.scheduleStateAt(enabled({ days: [] }), at(12, 0, SAT)).enforcing).toBe(true);
+    });
+
+    it("with windows, enforces only inside one of them (start inclusive, end exclusive)", () => {
+      const s = enabled({ windows: [{ start: "09:00", end: "12:00" }, { start: "14:00", end: "17:00" }] });
+      expect(shared.scheduleStateAt(s, at(8, 59)).enforcing).toBe(false);
+      expect(shared.scheduleStateAt(s, at(9, 0)).enforcing).toBe(true);
+      expect(shared.scheduleStateAt(s, at(11, 59)).enforcing).toBe(true);
+      expect(shared.scheduleStateAt(s, at(12, 0)).enforcing).toBe(false); // the gap
+      expect(shared.scheduleStateAt(s, at(15, 0)).enforcing).toBe(true);
+      expect(shared.scheduleStateAt(s, at(17, 0)).enforcing).toBe(false);
+      // A window on a non-enforce day doesn't enforce.
+      expect(shared.scheduleStateAt({ ...s, days: [1, 2, 3, 4, 5] }, at(10, 0, SAT)).enforcing).toBe(false);
+    });
+
+    it("supports overnight windows (22:00-06:00) on both sides of midnight", () => {
+      const s = enabled({ windows: [{ start: "22:00", end: "06:00" }] });
+      expect(shared.scheduleStateAt(s, at(23, 0)).enforcing).toBe(true);
+      expect(shared.scheduleStateAt(s, at(2, 0)).enforcing).toBe(true);
+      expect(shared.scheduleStateAt(s, at(5, 59)).enforcing).toBe(true);
+      expect(shared.scheduleStateAt(s, at(6, 0)).enforcing).toBe(false);
+      expect(shared.scheduleStateAt(s, at(12, 0)).enforcing).toBe(false);
+    });
+
+    it("start === end is an empty window, so such a schedule never enforces", () => {
+      const s = enabled({ windows: [{ start: "09:00", end: "09:00" }] });
+      expect(shared.scheduleStateAt(s, at(9, 0)).enforcing).toBe(false);
+      expect(shared.scheduleStateAt(s, at(12, 0)).enforcing).toBe(false);
+      // ...and an empty blackout never fires.
+      const b = enabled({ blackouts: [{ start: "12:00", end: "12:00" }] });
+      expect(shared.scheduleStateAt(b, at(12, 0)).blackout).toBe(false);
+    });
+
+    it("a blackout with days fires only on those days; without days (empty/absent) it fires every day", () => {
+      const wedOnly = enabled({ blackouts: [{ start: "12:00", end: "13:00", days: [WED] }] });
+      expect(shared.scheduleStateAt(wedOnly, at(12, 30))).toEqual({ enforcing: true, blackout: true });
+      expect(shared.scheduleStateAt(wedOnly, at(13, 0)).blackout).toBe(false);
+      expect(shared.scheduleStateAt(wedOnly, at(12, 30, THU)).blackout).toBe(false);
+
+      const daily = enabled({ blackouts: [{ start: "12:00", end: "13:00", days: [] }] });
+      expect(shared.scheduleStateAt(daily, at(12, 30, THU)).blackout).toBe(true);
+      const noDays = enabled({ blackouts: [{ start: "12:00", end: "13:00" }] });
+      expect(shared.scheduleStateAt(noDays, at(12, 30, SAT)).blackout).toBe(true);
+    });
+
+    it("a blackout is independent of enforcement: it fires on a non-enforce day and outside windows", () => {
+      const s = enabled({ days: [1, 2, 3, 4, 5], windows: [{ start: "09:00", end: "17:00" }], blackouts: [{ start: "20:00", end: "22:00" }] });
+      expect(shared.scheduleStateAt(s, at(21, 0, SAT))).toEqual({ enforcing: false, blackout: true });
+      expect(shared.scheduleStateAt(s, at(21, 0))).toEqual({ enforcing: false, blackout: true });
+    });
+
+    it("an overnight blackout (23:00-01:00) matches before and after midnight", () => {
+      const s = enabled({ blackouts: [{ start: "23:00", end: "01:00" }] });
+      expect(shared.scheduleStateAt(s, at(23, 30)).blackout).toBe(true);
+      expect(shared.scheduleStateAt(s, at(0, 30)).blackout).toBe(true);
+      expect(shared.scheduleStateAt(s, at(1, 0)).blackout).toBe(false);
+    });
+
+    it("tolerates malformed entries (null items, missing times) instead of throwing", () => {
+      const s = enabled({ windows: [null, { start: "09:00" }], blackouts: [undefined, "junk", { end: "13:00" }] });
+      // { start: "09:00" } with no end -> 09:00-00:00, an overnight window.
+      expect(shared.scheduleStateAt(s, at(12)).enforcing).toBe(true);
+      expect(shared.scheduleStateAt(s, at(8)).enforcing).toBe(false);
+      // { end: "13:00" } with no start -> 00:00-13:00.
+      expect(shared.scheduleStateAt(s, at(12)).blackout).toBe(true);
+      expect(shared.scheduleStateAt(s, at(14)).blackout).toBe(false);
+      expect(shared.scheduleStateAt({ enabled: true, days: "weekdays", windows: "x", blackouts: 5 }, at(12))).toEqual({ enforcing: true, blackout: false });
+    });
+
+    it("defaults to the current time when no date is given, and exposes day abbreviations", () => {
+      expect(shared.scheduleStateAt(undefined)).toEqual({ enforcing: true, blackout: false });
+      expect(shared.SCHED_DAY_ABBR).toEqual(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]);
+      expect(shared.SCHEDULE_DEFAULTS).toEqual({ enabled: false, days: allDays, windows: [], blackouts: [] });
+    });
+  });
+
+  describe("scheduleBlackoutUntil()", () => {
+    it("is null when disabled or when no blackout is active right now", () => {
+      expect(shared.scheduleBlackoutUntil(undefined, at(12))).toBeNull();
+      const s = enabled({ blackouts: [{ start: "12:00", end: "13:00" }] });
+      expect(shared.scheduleBlackoutUntil({ ...s, enabled: false }, at(12, 30))).toBeNull();
+      expect(shared.scheduleBlackoutUntil(s, at(13, 0))).toBeNull();
+      expect(shared.scheduleBlackoutUntil(enabled({ blackouts: [{ start: "12:00", end: "13:00", days: [THU] }] }), at(12, 30))).toBeNull();
+    });
+
+    it("for a same-day blackout, returns its end today", () => {
+      const s = enabled({ blackouts: [{ start: "12:00", end: "13:00" }] });
+      expect(shared.scheduleBlackoutUntil(s, at(12, 30))).toBe(at(13).getTime());
+    });
+
+    it("for an overnight blackout, the end is tomorrow before midnight and today after it", () => {
+      const s = enabled({ blackouts: [{ start: "22:00", end: "02:00" }] });
+      expect(shared.scheduleBlackoutUntil(s, at(23, 0))).toBe(at(2, 0, 1).getTime());
+      expect(shared.scheduleBlackoutUntil(s, at(1, 0))).toBe(at(2, 0).getTime());
+    });
+
+    it("with overlapping blackouts, reports the latest end", () => {
+      const s = enabled({ blackouts: [{ start: "12:00", end: "13:00" }, { start: "12:30", end: "15:00" }] });
+      expect(shared.scheduleBlackoutUntil(s, at(12, 45))).toBe(at(15).getTime());
+    });
+  });
+
+  describe("evaluateSite() with the global schedule", () => {
+    const site = { domain: "youtube.com", budgetSeconds: 600, lockoutSeconds: null, rules: [] };
+    const fresh = () => ({ date: "2026-01-14", totalMs: 0, sites: {} });
+    const noon = at(12).getTime();
+
+    it("absent schedule: same result as before, with free:false", () => {
+      expect(shared.evaluateSite(site, fresh(), 3_600_000, noon)).toEqual({
+        locked: false, free: false, reason: null, until: null, remainingMs: 600_000, budgetMs: 600_000
+      });
+    });
+
+    it("a blackout outranks a per-site allow window, an active cool-down and a spent budget: reason 'schedule' until it ends", () => {
+      const schedule = enabled({ blackouts: [{ start: "09:00", end: "11:00" }] });
+      const allowed = { ...site, rules: [{ type: "allow", days: [WED], start: "08:00", end: "20:00" }] };
+      const usage = { date: "2026-01-14", totalMs: 3_600_000, sites: { "youtube.com": { totalMs: 600_000, lockedUntil: at(18).getTime() } } };
+      const status = shared.evaluateSite(allowed, usage, 3_600_000, at(10).getTime(), schedule);
+      expect(status).toEqual({ locked: true, free: false, reason: "schedule", until: at(11).getTime(), remainingMs: 0, budgetMs: 600_000 });
+    });
+
+    it("off-hours (outside the enforcement windows) the site is free with its full allowance, whatever its usage or cool-down", () => {
+      const schedule = enabled({ windows: [{ start: "09:00", end: "17:00" }] });
+      const usage = { date: "2026-01-14", totalMs: 700_000, sites: { "youtube.com": { totalMs: 600_000, lockedUntil: at(23).getTime() } } };
+      expect(shared.evaluateSite(site, usage, 3_600_000, at(20).getTime(), schedule)).toEqual({
+        locked: false, free: true, reason: null, until: null, remainingMs: 600_000, budgetMs: 600_000
+      });
+      // The allowance is the tighter of the site budget and the global cap.
+      expect(shared.evaluateSite(site, usage, 300_000, at(20).getTime(), schedule).remainingMs).toBe(300_000);
+      // ...and on a non-enforce day, all day.
+      const weekdays = enabled({ days: [1, 2, 3, 4, 5] });
+      expect(shared.evaluateSite(site, usage, 3_600_000, at(12, 0, SAT).getTime(), weekdays).free).toBe(true);
+    });
+
+    it("a per-site block window still locks the site off-hours (per-site rules outrank 'free')", () => {
+      const schedule = enabled({ windows: [{ start: "09:00", end: "17:00" }] });
+      const blocked = { ...site, rules: [{ type: "block", days: [WED], start: "19:00", end: "21:00" }] };
+      const status = shared.evaluateSite(blocked, fresh(), 3_600_000, at(20).getTime(), schedule);
+      expect(status.locked).toBe(true);
+      expect(status.free).toBe(false);
+      expect(status.reason).toBe("schedule");
+      expect(status.until).toBe(at(21).getTime());
+    });
+
+    it("inside the enforcement window the usual budget/lockout/global order applies", () => {
+      const schedule = enabled({ windows: [{ start: "09:00", end: "17:00" }] });
+      const spent = { date: "2026-01-14", totalMs: 600_000, sites: { "youtube.com": { totalMs: 600_000 } } };
+      const status = shared.evaluateSite(site, spent, 3_600_000, noon, schedule);
+      expect(status.locked).toBe(true);
+      expect(status.free).toBe(false);
+      expect(status.reason).toBe("budget");
+    });
+  });
+
+  describe("usageAccrues()", () => {
+    const site = { domain: "youtube.com", budgetSeconds: 600, lockoutSeconds: null, rules: [] };
+
+    it("charges the budget only while enforcing, not in a blackout, not off-hours, not in a per-site block window", () => {
+      expect(shared.usageAccrues(site, at(12).getTime(), undefined)).toBe(true);
+      const windows = enabled({ windows: [{ start: "09:00", end: "17:00" }] });
+      expect(shared.usageAccrues(site, at(12).getTime(), windows)).toBe(true);
+      expect(shared.usageAccrues(site, at(20).getTime(), windows)).toBe(false);
+      const blackout = enabled({ blackouts: [{ start: "11:00", end: "13:00" }] });
+      expect(shared.usageAccrues(site, at(12).getTime(), blackout)).toBe(false);
+      const blocked = { ...site, rules: [{ type: "block", days: [WED], start: "09:00", end: "17:00" }] };
+      expect(shared.usageAccrues(blocked, at(12).getTime(), undefined)).toBe(false);
+      expect(shared.usageAccrues(blocked, at(18).getTime(), undefined)).toBe(true);
+    });
+  });
+});

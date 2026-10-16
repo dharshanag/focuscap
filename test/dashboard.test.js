@@ -427,3 +427,83 @@ describe("dashboard.js", () => {
     });
   });
 });
+
+// --- Global schedule: off-hours rows and blackout rows. ---
+describe("dashboard.js global schedule", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  const allDays = [0, 1, 2, 3, 4, 5, 6];
+  const officeHours = { enabled: true, days: allDays, windows: [{ start: "09:00", end: "17:00" }], blackouts: [] };
+
+  it("off-hours a site's row reads 'off-hours' (no countdown), isn't locked, and can be removed", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 0, 14, 20, 0, 0)); // Wed 20:00, outside 09:00-17:00
+    const { dash, getStore } = await loadDashboard({
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 600 }],
+      budgetSeconds: 3600,
+      usage: { date: localTodayKey(), totalMs: 60_000, sites: { "youtube.com": { totalMs: 60_000 } } },
+      schedule: officeHours
+    });
+    const li = row("youtube.com");
+    expect(li.classList.contains("locked")).toBe(false);
+    expect(li.querySelector(".budget").textContent).toBe("off-hours");
+    expect(li.querySelector(".budget").title).toMatch(/enforcement hours/);
+    expect(li.querySelector(".remove").disabled).toBe(false);
+    expect(dash.describeStatus({ locked: false, free: true, remainingMs: 600_000 })).toBe("off-hours");
+
+    await dash.removeSite("youtube.com");
+    expect(getStore().focusSites).toEqual([]);
+  });
+
+  it("inside the enforcement window the row shows the countdown as before", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 0, 14, 12, 0, 0));
+    await loadDashboard({
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 600 }],
+      budgetSeconds: 3600,
+      usage: { date: localTodayKey(), totalMs: 60_000, sites: { "youtube.com": { totalMs: 60_000 } } },
+      schedule: officeHours
+    });
+    expect(row("youtube.com").querySelector(".budget").textContent).toBe("9:00 left");
+  });
+
+  it("during a global blackout every site reads as scheduled-locked until the blackout ends, and can't be removed or edited", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 0, 14, 12, 0, 0));
+    const { dash, getStore } = await loadDashboard({
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 600 }, { domain: "reddit.com" }],
+      budgetSeconds: 3600,
+      schedule: { enabled: true, days: allDays, windows: [], blackouts: [{ start: "11:00", end: "13:30" }] }
+    });
+    for (const domain of ["youtube.com", "reddit.com"]) {
+      const li = row(domain);
+      expect(li.classList.contains("locked")).toBe(true);
+      expect(li.querySelector(".budget").textContent).toBe("🔒 scheduled until 13:30");
+      expect(li.querySelector(".remove").disabled).toBe(true);
+    }
+    const ok = await dash.updateSite("youtube.com", (s) => ({ ...s, budgetSeconds: 60_000 }));
+    expect(ok).toBe(false);
+    expect(getStore().focusSites[0].budgetSeconds).toBe(600);
+  });
+
+  it("a schedule change in storage re-renders the list (and is not swallowed by an open editor)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 0, 14, 20, 0, 0));
+    const { dash, listeners, setStore } = await loadDashboard({
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 600 }],
+      budgetSeconds: 3600
+    });
+    expect(row("youtube.com").querySelector(".budget").textContent).toBe("10:00 left");
+    dash.expanded.add("youtube.com");
+    await dash.load();
+    row("youtube.com").querySelector(".site-budget").focus();
+
+    setStore({ schedule: officeHours });
+    listeners.onChanged.forEach((fn) => fn({ schedule: { newValue: officeHours } }, "local"));
+    await flush();
+    expect(row("youtube.com").querySelector(".budget").textContent).toBe("off-hours");
+  });
+});
