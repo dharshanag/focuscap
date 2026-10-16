@@ -66,9 +66,9 @@ on each `connectNative()` call, so no restart is needed.
 posts a **per-site lock snapshot** via
 `chrome.runtime.connectNative("com.focuscap.host")` whenever state changes —
 on every heartbeat, on a navigation-time block, at the midnight reset, and
-when a per-site `unlock:<domain>` alarm fires at a cool-down or schedule
-window's end (see `notifyNativeHost()` / `snapshotForHost()`). The payload
-is `{ locked, sites: { [domain]: { locked, reason, until, remainingMs } },
+when a per-site `unlock:<domain>` alarm fires at the end of a cool-down,
+per-site schedule rule or global blackout (see `notifyNativeHost()` /
+`snapshotForHost()`). The payload is `{ locked, sites: { [domain]: { locked, reason, until, remainingMs } },
 remainingMs, budgetMs, focusSites, lastBlocked }`; this host keeps only the
 known, correctly-typed fields. Once registered per the steps above, that's
 the whole extension→host leg — no extension code changes needed. Verify

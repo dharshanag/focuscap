@@ -28,7 +28,7 @@ low.
 ## How it works
 
 1. **List your distraction sites.** Add domains like `youtube.com` in the
-   popup. Subdomains are covered automatically (`m.youtube.com`,
+   popup or the Dashboard. Subdomains are covered automatically (`m.youtube.com`,
    `www.youtube.com`).
 2. **Give each site its rules.** A daily budget in minutes (30 by default),
    what happens after the limit — locked until midnight, or a cool-down of N
@@ -39,9 +39,9 @@ low.
    minutes, red under one.
 4. **Hit the limit, hit the wall.** Opening a locked site redirects you to a
    calm, full-page block screen that says why — "Cooling down, back in 42m",
-   "Blocked right now, unblocks at 17:00", or "Blocked for the day" — with a
-   live countdown to the actual unlock. It doesn't just cover the site — it
-   replaces it.
+   "Blocked right now, unblocks in 3h" (a schedule rule or a blackout), or
+   "Blocked for the day" — with a live countdown to the actual unlock. It
+   doesn't just cover the site — it replaces it.
 5. **Reset on schedule.** A cool-down hands the site a fresh allowance when it
    ends; everything else resets automatically at local midnight. Nothing to
    reset, nothing to re-arm.
@@ -53,16 +53,19 @@ low.
 Most timers count wall-clock time and overcharge you. Focus Cap only counts
 time you are **genuinely engaged**:
 
-- The tab must be the **active tab**, in a **focused browser window**.
-- You must **not be idle** (no mouse, keyboard, or scroll for a configurable
-  number of seconds pauses the clock).
-- **Watching a video counts** — a playing video in the foreground keeps the
-  clock running even if you don't touch anything.
+- The tab must be the **visible, active tab**.
+- You must **not be idle** — any mouse, keyboard, scroll or touch within the
+  idle window (45 seconds by default, tunable, or off entirely) keeps the
+  clock running, even if a browser menu or the Focus Cap popup briefly took
+  keyboard focus.
+- **Watching a video counts** — a playing video keeps the clock running even
+  if you don't touch anything, but only while the browser window is actually
+  focused, so alt-tabbing away from a running video stops the drain.
 - **Background tabs never count.** Music playing in a tab you're not looking
   at costs you nothing.
 
-Switch away and the clock pauses. Come back and it resumes. You're charged
-for attention, not for leaving a tab open.
+Hide the tab or stop interacting and the clock pauses. Come back and it
+resumes. You're charged for attention, not for leaving a tab open.
 
 ---
 
@@ -91,11 +94,14 @@ Focus Cap assumes the person most likely to sabotage it is its owner at
 
 ## Private by default
 
-- **Everything stays on your machine.** Site list, budget, and usage live in
-  the browser's local extension storage. There is no account, no sign-in, no
-  server, no telemetry, no analytics.
-- **Nothing leaves your device.** Focus Cap never phones home. The only
+- **Nothing leaves your device.** Focus Cap never phones home. There is no
+  account, no sign-in, no server, no telemetry, no analytics. The only
   network requests are the ones *you* make to the sites you visit.
+- **What it keeps, it keeps locally.** In the browser's extension storage:
+  your site list and rules, your daily limit, schedule and settings, today's
+  usage — and a **14-day log of engaged time per site, for every site you
+  visit**, which is what the stats page is built from. Older days are pruned
+  automatically; nothing is uploaded or synced.
 - **Open source.** Every line is readable at
   `github.com/dharshanag/focuscap`. If you don't trust a blocker with
   permission to see every page, you shouldn't have to — read it.
@@ -127,15 +133,15 @@ for setup.
 | **Install** | Load unpacked from the repo — no store account needed. |
 | **Cost** | Free. Open source. |
 | **Accounts** | None. |
-| **Data collected** | None. |
+| **Data collected** | None sent anywhere. Locally: a 14-day log of time per site plus your settings, in the browser's extension storage. |
 | **Permissions** | Storage (your settings), navigation (to block before load), alarms (midnight reset and unlock timers), native messaging (companion, optional). |
-| **Tested** | 110 automated tests in CI, plus end-to-end runs in a real browser through the native host to the companion. |
+| **Tested** | 329 automated tests in CI, plus end-to-end runs in a real browser through the native host to the companion. |
 
 ---
 
 ## Rules per site, not one blunt limit
 
-Every site gets its own rules, edited right from the popup:
+Every site gets its own rules, edited from its ⚙ on the Dashboard:
 
 - **Per-site budgets** — YouTube gets 20 minutes, Reddit gets 10, each on its
   own clock.
@@ -148,6 +154,16 @@ Every site gets its own rules, edited right from the popup:
   budgets can't quietly add up to an afternoon.
 - **A 60-second undo** — a schedule rule you just added stays editable for a
   minute even if it locked the site, so a fumbled hour isn't a lost afternoon.
+- **A global schedule** — enforcement hours outside of which every site is
+  free and nothing is charged, and blackout windows during which every site
+  is off-limits whatever its budget.
+- **Daily stats** — a page with today's active / distraction / productive
+  time, a per-site breakdown, a 7-day trend and "consider blocking" hints
+  for distraction sites you haven't listed yet.
+- **A Dashboard and a popup** — the popup for a glance and quick edits; the
+  Dashboard (options page) for onboarding, per-site rules, the schedule and
+  advanced settings like idle pausing.
+- **Light and dark theme** on every page.
 
 ## Coming next
 
@@ -163,8 +179,9 @@ Every site gets its own rules, edited right from the popup:
 1. Clone or download `github.com/dharshanag/focuscap`.
 2. Open `chrome://extensions` (or `edge://extensions`), turn on **Developer
    mode**, click **Load unpacked**, and pick the repo folder.
-3. Pin Focus Cap, open it, add your sites, and tune each one's budget,
-   cool-down and schedule from the ⚙ next to it.
+3. The Dashboard opens by itself the first time; pick your sites and a daily
+   limit, then tune each site's budget, cool-down and schedule from the ⚙
+   next to it. Pin Focus Cap for the popup.
 
 Want to feel it work right away? Set a site's budget to `0.1` minutes (six
 seconds) with a one-minute cool-down, open it, and scroll. Meet the wall —

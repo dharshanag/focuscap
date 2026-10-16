@@ -2,8 +2,8 @@
 
 A menubar/tray app that surfaces the extension's lock state at the OS level
 — a small, **non-blocking**, always-on-top corner pill listing which tracked
-sites are locked and until when (cool-down end, schedule window end, or
-midnight), visible no matter what app is in front.
+sites are locked and until when (cool-down end, schedule rule or global
+blackout end, or midnight), visible no matter what app is in front.
 
 It deliberately does **not** cover the screen. The extension's promise is
 "distraction *sites* are locked", not "your computer is locked", and until
