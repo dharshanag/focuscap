@@ -5,7 +5,7 @@
 // enforces with (shared.js: normalizeSite / normalizeUsage / evaluateSite),
 // so what the popup shows can never disagree with what actually gets blocked.
 
-const DEFAULT_SETTINGS = { idleSeconds: 45 };
+const DEFAULT_SETTINGS = { idleEnabled: true, idleSeconds: 45 };
 const DEFAULT_BUDGET_SECONDS = 1800; // global cap across all sites (30 min)
 const REMOVE_LOCK_MS = 5 * 60 * 1000; // can't remove sites in the last 5 min
 
@@ -454,7 +454,14 @@ async function saveBudget() {
 async function saveSettings() {
   const parsed = parseInt(el("idleInput").value, 10);
   const idleSeconds = Math.max(5, Number.isNaN(parsed) ? DEFAULT_SETTINGS.idleSeconds : parsed);
-  await set({ settings: { idleSeconds } });
+  // Merge over what's stored so flags this popup doesn't edit (idleEnabled)
+  // survive an idle-seconds change.
+  const { settings } = await get(["settings"]);
+  await set({ settings: { ...DEFAULT_SETTINGS, ...(settings || {}), idleSeconds } });
+}
+
+function openStats() {
+  chrome.tabs.create({ url: chrome.runtime.getURL("stats.html") }).catch(() => {});
 }
 
 if (typeof module !== "undefined" && module.exports) {
@@ -469,6 +476,7 @@ if (typeof module !== "undefined" && module.exports) {
     ruleInGrace,
     RULE_GRACE_MS,
     saveSettings,
+    openStats,
     saveBudget,
     addSite,
     removeSite,
@@ -481,6 +489,7 @@ if (typeof module !== "undefined" && module.exports) {
 el("addForm").addEventListener("submit", addSite);
 el("budgetInput").addEventListener("change", saveBudget);
 el("idleInput").addEventListener("change", saveSettings);
+el("statsBtn").addEventListener("click", openStats);
 
 // Keep the popup's countdown and lock state live while it's open — but don't
 // yank a control out from under the user mid-edit: usage ticks every second

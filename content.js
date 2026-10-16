@@ -1,7 +1,9 @@
 // Focus Cap — content script (runs on every top-level page).
-// Sole job: measure genuine engagement time on distraction sites and report it.
-// Time only counts while the tab is visible, the window is focused, and you're
-// not idle. Enforcement (redirecting to the blocked page) lives in background.js.
+// Sole job: measure genuine engagement time on this page and report it. Every
+// page heartbeats (that's what feeds the per-domain daily stats); only tracked
+// distraction sites spend budget and show the corner badge. Time only counts
+// while the tab is visible and you're not idle. Enforcement (redirecting to
+// the blocked page) lives in background.js.
 
 (() => {
   const hostname = location.hostname;
@@ -9,7 +11,7 @@
   let running = false;
   let loop = null;
   let lastInputAt = Date.now();
-  let settings = { idleSeconds: 45 };
+  let settings = { idleEnabled: true, idleSeconds: 45 };
   let badgeHost = null;
   let badgeEl = null;
 
@@ -27,13 +29,24 @@
   }
 
   function isEngaged() {
-    // Must be the tab you're actually looking at, in a focused window.
-    // (A backgrounded music tab is hidden → never counts. That case still holds.)
-    if (document.visibilityState !== "visible" || !document.hasFocus()) return false;
-    // Recent interaction counts...
-    if (Date.now() - lastInputAt < settings.idleSeconds * 1000) return true;
-    // ...and so does passively watching a playing video in the foreground.
-    return mediaPlaying();
+    // Must be the foreground, visible tab. (A backgrounded music tab is hidden
+    // → never counts. That case still holds.)
+    if (document.visibilityState !== "visible") return false;
+    // Idle-pausing can be turned off in settings — then all foreground time
+    // counts. (A missing value means "on", for settings saved before the flag.)
+    if (settings.idleEnabled === false) return true;
+    // Recent interaction counts — even if a browser popup/menu (or the Focus
+    // Cap popup) briefly stole keyboard focus. We deliberately do NOT require
+    // document.hasFocus() here, so opening the extensions menu won't pause you.
+    if (Date.now() - lastInputAt < idleWindowMs()) return true;
+    // Passive video counts only while the page is truly focused, so a video
+    // left playing after you alt-tab to another app doesn't keep draining time.
+    return document.hasFocus() && mediaPlaying();
+  }
+
+  function idleWindowMs() {
+    const s = Number(settings.idleSeconds);
+    return (Number.isNaN(s) ? 45 : s) * 1000;
   }
 
   async function send(type) {
@@ -47,12 +60,27 @@
   async function start() {
     if (running) return;
     const res = await send("entering");
-    if (!res || !res.track) return; // not a distraction site
+    if (!res || !res.track) return; // no usable hostname (file://, about:blank)
     settings = res.settings || settings;
     running = true;
-    showBadge();
-    refreshBadge();
+    syncBadge(res);
     loop = setInterval(tick, 1000);
+  }
+
+  // The countdown badge belongs only on a tracked site that is actually being
+  // spent down — not on untracked pages (stats track those silently), and not
+  // on a locked page (background is already redirecting it away).
+  function badgeWanted(res) {
+    return !!res.tracked && !res.overlay;
+  }
+
+  function syncBadge(res) {
+    if (badgeWanted(res)) {
+      showBadge();
+      refreshBadge();
+    } else {
+      hideBadge();
+    }
   }
 
   function stop() {
@@ -65,7 +93,7 @@
   }
 
   async function tick() {
-    // Idle / hidden / unfocused → pause counting, but stay attached.
+    // Idle / hidden → pause counting, but stay attached.
     if (!isEngaged()) return;
     const res = await send("heartbeat");
     if (!res || !res.track) {
@@ -73,7 +101,9 @@
       return;
     }
     settings = res.settings || settings;
-    refreshBadge();
+    // The site may have just been added to (or removed from) the tracked
+    // list, or just locked — show, refresh or clear the badge accordingly.
+    syncBadge(res);
     // If res.overlay is true, background is already redirecting this tab away.
   }
 
@@ -103,9 +133,13 @@
     updateBadge(status.locked ? 0 : status.remainingMs);
   }
 
-  // Test hook: the badge lives in a closed shadow root.
+  // Test hooks: the badge lives in a closed shadow root, and the loop state
+  // is otherwise invisible from outside.
   function badgeText() {
     return badgeEl ? badgeEl.querySelector(".time").textContent : null;
+  }
+  function isRunning() {
+    return running;
   }
 
   function showBadge() {
@@ -153,17 +187,20 @@
     }
   }
 
-  // Only bother starting when the page is actually in front of the user.
+  // Start whenever this is the visible, foreground tab. We intentionally don't
+  // gate on document.hasFocus() — otherwise opening a browser menu/popup (which
+  // steals focus but leaves the tab visible) would tear the timer down.
   function evaluate() {
-    if (document.visibilityState === "visible" && document.hasFocus()) start();
+    if (document.visibilityState === "visible") start();
   }
 
+  // Pause only when the tab is actually hidden (switched away / minimized) — NOT
+  // on a plain window blur, which fires for the extensions menu and our popup.
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") evaluate();
     else stop();
   });
-  window.addEventListener("blur", stop); // switched to another app
-  window.addEventListener("focus", evaluate);
+  window.addEventListener("focus", evaluate); // resume promptly on return
 
   // React to dashboard changes (site list or daily budget edits).
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -180,6 +217,6 @@
   evaluate();
 
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { fmtClock, todayKey, isEngaged, mediaPlaying, showBadge, hideBadge, refreshBadge, badgeText };
+    module.exports = { fmtClock, todayKey, isEngaged, mediaPlaying, showBadge, hideBadge, refreshBadge, badgeText, isRunning, stop, evaluate };
   }
 })();

@@ -659,3 +659,253 @@ describe("background.js", () => {
     });
   });
 });
+
+// --- Per-domain daily stats: every page's engaged time, written throttled ---
+describe("background.js per-domain stats", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  function fixedClock(date = new Date(2026, 9, 16, 12, 0, 0)) {
+    vi.useFakeTimers();
+    vi.setSystemTime(date);
+  }
+
+  // Drive N one-second heartbeats, advancing the fake clock 1s each time.
+  async function beat(bg, hostname, seconds) {
+    let res;
+    for (let i = 0; i < seconds; i++) {
+      vi.setSystemTime(Date.now() + 1000);
+      res = await bg.handle({ type: "heartbeat", hostname });
+    }
+    return res;
+  }
+
+  const statsWrites = (chrome) => chrome.storage.local.set.mock.calls.filter(([obj]) => obj && obj.stats);
+
+  it("an untracked page accrues stats per domain and never touches usage", async () => {
+    fixedClock();
+    const { bg, chrome, getStore } = await loadBackground({
+      focusSites: [{ domain: "youtube.com" }],
+      budgetSeconds: 1800
+    });
+    const enter = await bg.handle({ type: "entering", hostname: "docs.example.org" });
+    expect(enter).toEqual({ track: true, tracked: false, overlay: false, settings: { idleEnabled: true, idleSeconds: 45 } });
+
+    const res = await beat(bg, "docs.example.org", 3);
+    expect(res.track).toBe(true);
+    expect(res.tracked).toBe(false);
+    expect(res.overlay).toBe(false);
+    await bg.handle({ type: "leaving", hostname: "docs.example.org" });
+
+    const store = getStore();
+    expect(store.stats[localTodayKey()]).toEqual({ "docs.example.org": 3000 });
+    expect(store.usage).toBeUndefined();
+    const usageWrites = chrome.storage.local.set.mock.calls.filter(([obj]) => obj && "usage" in obj);
+    expect(usageWrites).toHaveLength(0);
+  });
+
+  it("a tracked site accrues stats AND usage, and the reply says tracked:true", async () => {
+    fixedClock();
+    const { bg, getStore } = await loadBackground({
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 600 }],
+      budgetSeconds: 1800
+    });
+    const enter = await bg.handle({ type: "entering", hostname: "www.youtube.com" });
+    expect(enter.track).toBe(true);
+    expect(enter.tracked).toBe(true);
+    expect(enter.settings).toEqual({ idleEnabled: true, idleSeconds: 45 });
+    await beat(bg, "www.youtube.com", 2);
+    await bg.handle({ type: "leaving", hostname: "www.youtube.com" });
+
+    const store = getStore();
+    expect(store.stats[localTodayKey()]).toEqual({ "youtube.com": 2000 });
+    expect(store.usage.sites["youtube.com"].totalMs).toBe(2000);
+    expect(store.usage.totalMs).toBe(2000);
+  });
+
+  it("strips a leading www. and lowercases the stats key; subdomains stay distinct", async () => {
+    fixedClock();
+    const { bg, getStore } = await loadBackground({});
+    for (const host of ["www.Example.com", "example.com", "m.example.com"]) {
+      await bg.handle({ type: "entering", hostname: host });
+    }
+    await beat(bg, "www.Example.com", 1);
+    await beat(bg, "example.com", 1);
+    await beat(bg, "m.example.com", 1);
+    await bg.handle({ type: "leaving", hostname: "example.com" });
+
+    const day = getStore().stats[localTodayKey()];
+    // www.Example.com and example.com share one clock, so their beats are
+    // credited to one key; m.example.com is its own domain.
+    expect(Object.keys(day).sort()).toEqual(["example.com", "m.example.com"]);
+    expect(bg.statsDomain("WWW.Foo.Bar")).toBe("foo.bar");
+    expect(bg.statsDomain("wwwfoo.bar")).toBe("wwwfoo.bar");
+    expect(bg.statsDomain("")).toBe("");
+    expect(bg.statsDomain(undefined)).toBe("");
+  });
+
+  it("a page with no usable hostname (file://, about:blank) is told track:false and writes nothing", async () => {
+    fixedClock();
+    const { bg, chrome } = await loadBackground({});
+    expect(await bg.handle({ type: "entering", hostname: "" })).toEqual({ track: false });
+    expect(await bg.handle({ type: "heartbeat", hostname: "" })).toEqual({ track: false });
+    expect(chrome.storage.local.set).not.toHaveBeenCalled();
+  });
+
+  it("caps a single heartbeat's credit at 5s (worker-sleep gaps don't over-count)", async () => {
+    fixedClock();
+    const { bg, getStore } = await loadBackground({});
+    await bg.handle({ type: "entering", hostname: "example.com" });
+    vi.setSystemTime(Date.now() + 60_000);
+    await bg.handle({ type: "heartbeat", hostname: "example.com" });
+    await bg.handle({ type: "leaving", hostname: "example.com" });
+    expect(getStore().stats[localTodayKey()]["example.com"]).toBe(5000);
+  });
+
+  it("a heartbeat with no prior tick for its domain (fresh worker) credits nothing", async () => {
+    fixedClock();
+    const { bg, getStore } = await loadBackground({});
+    await bg.handle({ type: "heartbeat", hostname: "example.com" });
+    await bg.handle({ type: "leaving", hostname: "example.com" });
+    expect(getStore().stats).toBeUndefined();
+    // ...but it did start the clock: the next beat counts normally.
+    await beat(bg, "example.com", 1);
+    await bg.handle({ type: "leaving", hostname: "example.com" });
+    expect(getStore().stats[localTodayKey()]["example.com"]).toBe(1000);
+  });
+
+  it("throttles: heartbeats within 5s of the last flush are held in memory; the next beat at >=5s writes them all", async () => {
+    fixedClock();
+    const { bg, chrome, getStore } = await loadBackground({});
+    await bg.handle({ type: "entering", hostname: "example.com" });
+    // First beat: nothing flushed yet this session -> written straight away.
+    await beat(bg, "example.com", 1);
+    expect(statsWrites(chrome)).toHaveLength(1);
+    expect(getStore().stats[localTodayKey()]["example.com"]).toBe(1000);
+
+    // Two more beats inside the 5s window: accumulated, not written.
+    await beat(bg, "example.com", 2);
+    expect(statsWrites(chrome)).toHaveLength(1);
+    expect(getStore().stats[localTodayKey()]["example.com"]).toBe(1000);
+
+    // 5s after the last flush: one write carrying everything since.
+    await beat(bg, "example.com", 2); // now = flush + 4s
+    expect(statsWrites(chrome)).toHaveLength(1);
+    await beat(bg, "example.com", 1); // now = flush + 5s
+    expect(statsWrites(chrome)).toHaveLength(2);
+    expect(getStore().stats[localTodayKey()]["example.com"]).toBe(6000);
+  });
+
+  it("a flush inside a tracked heartbeat shares that heartbeat's single storage write", async () => {
+    fixedClock();
+    const { bg, chrome } = await loadBackground({ focusSites: [{ domain: "youtube.com" }] });
+    await bg.handle({ type: "entering", hostname: "youtube.com" });
+    chrome.storage.local.set.mockClear();
+    await beat(bg, "youtube.com", 1);
+    expect(chrome.storage.local.set).toHaveBeenCalledTimes(1);
+    expect(Object.keys(chrome.storage.local.set.mock.calls[0][0]).sort()).toEqual(["stats", "usage"]);
+  });
+
+  it("'leaving' flushes whatever is pending immediately", async () => {
+    fixedClock();
+    const { bg, chrome, getStore } = await loadBackground({});
+    await bg.handle({ type: "entering", hostname: "example.com" });
+    await beat(bg, "example.com", 3); // 1 write (first beat) + 2s pending
+    expect(statsWrites(chrome)).toHaveLength(1);
+    await bg.handle({ type: "leaving", hostname: "example.com" });
+    expect(statsWrites(chrome)).toHaveLength(2);
+    expect(getStore().stats[localTodayKey()]["example.com"]).toBe(3000);
+    // Nothing pending -> a second leaving writes nothing.
+    await bg.handle({ type: "leaving", hostname: "example.com" });
+    expect(statsWrites(chrome)).toHaveLength(2);
+  });
+
+  it("pending stats reach storage within 5s even with no further message (fallback timer)", async () => {
+    fixedClock();
+    const { bg, chrome, getStore } = await loadBackground({});
+    await bg.handle({ type: "entering", hostname: "example.com" });
+    await beat(bg, "example.com", 3);
+    expect(statsWrites(chrome)).toHaveLength(1);
+    expect(getStore().stats[localTodayKey()]["example.com"]).toBe(1000);
+
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(statsWrites(chrome)).toHaveLength(2);
+    expect(getStore().stats[localTodayKey()]["example.com"]).toBe(3000);
+  });
+
+  it("merges into existing stored stats rather than replacing other domains or days", async () => {
+    fixedClock();
+    const today = localTodayKey();
+    const { bg, getStore } = await loadBackground({
+      stats: { "2026-10-15": { "youtube.com": 90_000 }, [today]: { "example.com": 4000, "other.org": 1000 } }
+    });
+    await bg.handle({ type: "entering", hostname: "example.com" });
+    await beat(bg, "example.com", 2);
+    await bg.handle({ type: "leaving", hostname: "example.com" });
+    expect(getStore().stats).toEqual({
+      "2026-10-15": { "youtube.com": 90_000 },
+      [today]: { "example.com": 6000, "other.org": 1000 }
+    });
+  });
+
+  it("a day rollover writes the pending deltas under the OLD day key before starting the new one", async () => {
+    fixedClock(new Date(2026, 9, 16, 23, 59, 57));
+    const { bg, getStore } = await loadBackground({});
+    await bg.handle({ type: "entering", hostname: "example.com" });
+    await beat(bg, "example.com", 2); // 23:59:58 (written), 23:59:59 (pending)
+    vi.setSystemTime(new Date(2026, 9, 17, 0, 0, 1));
+    await bg.handle({ type: "heartbeat", hostname: "example.com" }); // 2s delta, new day
+    await bg.handle({ type: "leaving", hostname: "example.com" });
+    expect(getStore().stats).toEqual({
+      "2026-10-16": { "example.com": 2000 },
+      "2026-10-17": { "example.com": 2000 }
+    });
+  });
+
+  it("every flush prunes to the 14 most recent day keys (zero-padded keys sort chronologically)", async () => {
+    fixedClock();
+    const { bg, getStore } = await loadBackground({
+      stats: {
+        "2026-10-15": { a: 1 }, "2026-10-02": { a: 1 }, "2026-10-10": { a: 1 }, "2026-10-01": { a: 1 },
+        "2026-10-03": { a: 1 }, "2026-10-04": { a: 1 }, "2026-10-05": { a: 1 }, "2026-10-06": { a: 1 },
+        "2026-10-07": { a: 1 }, "2026-10-08": { a: 1 }, "2026-10-09": { a: 1 }, "2026-10-11": { a: 1 },
+        "2026-10-12": { a: 1 }, "2026-10-13": { a: 1 }, "2026-09-30": { a: 1 }, "2026-10-14": { a: 1 }
+      }
+    });
+    await bg.handle({ type: "entering", hostname: "example.com" });
+    await beat(bg, "example.com", 1);
+    const keys = Object.keys(getStore().stats).sort();
+    expect(keys).toHaveLength(bg.STATS_DAYS);
+    expect(keys[0]).toBe("2026-10-03");
+    expect(keys[keys.length - 1]).toBe("2026-10-16");
+    expect(keys).not.toContain("2026-09-30");
+    expect(keys).not.toContain("2026-10-01");
+    expect(keys).not.toContain("2026-10-02");
+
+    // pruneStats on its own: oldest first out, nothing dropped at exactly 14.
+    const fourteen = Object.fromEntries(keys.map((k) => [k, {}]));
+    expect(Object.keys(bg.pruneStats({ ...fourteen })).length).toBe(14);
+    const fifteen = { ...fourteen, "2026-10-17": {} };
+    expect(Object.keys(bg.pruneStats(fifteen)).sort()[0]).toBe("2026-10-04");
+  });
+
+  it("settings in the reply default idleEnabled=true for a stored record that predates the flag", async () => {
+    fixedClock();
+    const { bg } = await loadBackground({ settings: { idleSeconds: 20 } });
+    const res = await bg.handle({ type: "entering", hostname: "example.com" });
+    expect(res.settings).toEqual({ idleEnabled: true, idleSeconds: 20 });
+    const off = await loadBackground({ settings: { idleEnabled: false, idleSeconds: 20 } });
+    expect((await off.bg.handle({ type: "entering", hostname: "example.com" })).settings).toEqual({ idleEnabled: false, idleSeconds: 20 });
+  });
+
+  it("onInstalled seeds stats:{} and the idleEnabled default without clobbering existing keys", async () => {
+    const { bg, listeners, getStore } = await loadBackground({ settings: { idleEnabled: false, idleSeconds: 30 } });
+    void bg;
+    await listeners.onInstalled[0]();
+    expect(getStore().stats).toEqual({});
+    expect(getStore().settings).toEqual({ idleEnabled: false, idleSeconds: 30 });
+    expect(bg.DEFAULTS.settings).toEqual({ idleEnabled: true, idleSeconds: 45 });
+  });
+});

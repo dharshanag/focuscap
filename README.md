@@ -20,10 +20,19 @@ site once its rules say so.
 - No session to start. The rules are always in force.
 - A small **countdown badge** in the corner of each listed site shows how much
   time *that site* has left today (amber under 2 min, red under 1 min).
-- Time only accrues while a distraction site is the **active tab**, the
-  **browser window is focused**, and **you're not idle** (a foreground video
-  that's playing counts even without input). Background music in another tab
-  never counts, because a backgrounded tab is hidden.
+- Time only accrues while a distraction site is the **visible tab** and
+  **you're not idle**. Recent input counts even if a browser menu or the
+  Focus Cap popup briefly stole keyboard focus; a playing video counts only
+  while the window is actually focused, so alt-tabbing away stops the drain.
+  Idle-pausing can be turned off (`settings.idleEnabled: false`), in which
+  case all visible time counts. Background music in another tab never
+  counts, because a backgrounded tab is hidden.
+- **Daily stats** for every site, not just the blocked ones: each page's
+  engaged time is recorded per domain per day (`stats`, 14 days kept). The
+  popup's **📊 Daily stats** button opens a page with today's active /
+  distraction / productive totals, a per-site breakdown, a 7-day distraction
+  trend, and "Consider blocking" suggestions (distraction sites with a minute
+  or more today that you haven't blocked) with a one-click Block.
 - When a site locks, opening it **redirects you to a standalone block page**
   that says why — "Cooling down / Back in 42m", "Blocked right now / Unblocks
   in 3h", or "Blocked for the day" — with a live countdown to the actual
@@ -55,7 +64,12 @@ Set "After limit" to "block for 1 min" to watch it unlock again.
 - `background.js` — per-site timing accountant + navigation guard (redirects
   to the block page when a site's rules lock it); pushes lock state to the
   native host and arms `chrome.alarms` for midnight and each unlock time.
-- `content.js` — engagement detection, heartbeats, and the in-page badge.
+- `content.js` — engagement detection, heartbeats from every page, and the
+  in-page badge (shown only on tracked, unlocked sites).
+- `classify.js` — curated distraction / productive domain lists for the stats
+  page; unknown domains are neutral.
+- `stats.html/.css/.js` — the daily stats page (totals, per-site list, 7-day
+  trend, block suggestions).
 - `shared.js` — the pure per-site evaluation (`matchSite`, `normalizeSite`,
   `normalizeUsage`, `evaluateSite`, schedule-rule helpers) plus small
   formatting helpers, shared by background.js / content.js / dashboard.js so
@@ -103,4 +117,4 @@ build (#17); low-severity hardening from two security reviews (#9, #10, #18).
   detection — see issue #8).
 - Reliable in-app updates for the extension, native host and companion
   (issue #12).
-- Per-site stats and a daily summary.
+- Stats-driven nudges (e.g. a weekly digest) on top of the daily stats page.

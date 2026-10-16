@@ -42,7 +42,8 @@ export function createChromeMock(initialStorage = {}) {
       getURL: vi.fn((path) => `chrome-extension://test-extension-id/${path}`)
     },
     tabs: {
-      update: vi.fn(() => Promise.resolve())
+      update: vi.fn(() => Promise.resolve()),
+      create: vi.fn(() => Promise.resolve({ id: 99 }))
     },
     webNavigation: {
       onBeforeNavigate: { addListener: vi.fn((fn) => listeners.onBeforeNavigate.push(fn)) },

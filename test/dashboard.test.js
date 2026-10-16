@@ -13,6 +13,7 @@ function mountDashboardDom() {
     <div id="remaining"></div>
     <div id="barFill"></div>
     <div id="budgetNote"></div>
+    <button id="statsBtn"></button>
   `;
 }
 
@@ -54,6 +55,40 @@ describe("dashboard.js", () => {
     document.getElementById("idleInput").value = "30";
     await dash.saveSettings();
     expect(getStore().settings.idleSeconds).toBe(30);
+  });
+
+  it("saving idleSeconds preserves an idleEnabled flag this popup doesn't edit", async () => {
+    const { dash, getStore } = await loadDashboard({ settings: { idleEnabled: false, idleSeconds: 45 } });
+    document.getElementById("idleInput").value = "30";
+    await dash.saveSettings();
+    expect(getStore().settings).toEqual({ idleEnabled: false, idleSeconds: 30 });
+  });
+
+  it("saving idleSeconds with no stored settings writes the full default shape (idleEnabled: true)", async () => {
+    const { dash, getStore } = await loadDashboard({});
+    document.getElementById("idleInput").value = "30";
+    await dash.saveSettings();
+    expect(getStore().settings).toEqual({ idleEnabled: true, idleSeconds: 30 });
+  });
+
+  it("the Daily stats button opens stats.html in a new tab (and a rejected tabs.create is swallowed)", async () => {
+    const { chrome } = await loadDashboard({});
+    document.getElementById("statsBtn").click();
+    await flush();
+    expect(chrome.tabs.create).toHaveBeenCalledTimes(1);
+    expect(chrome.tabs.create).toHaveBeenCalledWith({ url: "chrome-extension://test-extension-id/stats.html" });
+
+    const rejections = [];
+    const onUnhandled = (r) => rejections.push(r);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      chrome.tabs.create = () => Promise.reject(new Error("Tabs cannot be created in this context"));
+      document.getElementById("statsBtn").click();
+      await flush();
+      expect(rejections).toHaveLength(0);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 
   it("removalLocked() forbids removal once locked or within the last 5 minutes of budget", async () => {

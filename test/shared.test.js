@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fmtClock, todayKey } from "../shared.js";
+import { dayKey, fmtClock, todayKey } from "../shared.js";
 
 describe("shared.js", () => {
   describe("fmtClock()", () => {
@@ -44,6 +44,14 @@ describe("shared.js", () => {
 
       vi.setSystemTime(new Date(2026, 11, 25, 12, 0, 0));
       expect(todayKey()).toBe("2026-12-25");
+    });
+
+    it("dayKey(date) keys an arbitrary date the same way todayKey() keys now (local, zero-padded)", () => {
+      expect(dayKey(new Date(2026, 0, 5, 23, 59, 59))).toBe("2026-01-05");
+      expect(dayKey(new Date(2026, 9, 16, 0, 0, 0).getTime())).toBe("2026-10-16"); // ms timestamp works too
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 2, 7, 9, 0, 0));
+      expect(dayKey(new Date())).toBe(todayKey());
     });
 
     it("keys sort chronologically as plain strings (what stats pruning relies on)", () => {

@@ -173,6 +173,21 @@ button[type="submit"], .add-form button {
 }
 .add-form button:hover { background: var(--accent); }
 
+/* Popup-level actions (open the stats page) */
+.popup-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.stats-btn {
+  width: 100%;
+  padding: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.stats-btn:hover { border-color: var(--accent-dim); color: var(--accent); }
+
 /* Per-site rows: header line + collapsible editor */
 .site-list li { flex-wrap: wrap; }
 .site-list .row { display: flex; align-items: center; gap: 8px; width: 100%; }

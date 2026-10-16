@@ -51,7 +51,7 @@ describe("manifest.json", () => {
 });
 
 describe("theme.js page wiring", () => {
-  for (const page of ["dashboard.html", "time-is-up.html"]) {
+  for (const page of ["dashboard.html", "time-is-up.html", "stats.html"]) {
     it(`${page} loads theme.js in <head> before any other script`, () => {
       const doc = parsePage(page);
       const scripts = [...doc.querySelectorAll("script")];
@@ -83,6 +83,53 @@ describe("theme.js page wiring", () => {
     const srcs = [...parsePage("dashboard.html").querySelectorAll("script[src]")].map((s) => s.getAttribute("src"));
     expect(srcs.indexOf("shared.js")).toBeGreaterThan(-1);
     expect(srcs.indexOf("shared.js")).toBeLessThan(srcs.indexOf("dashboard.js"));
+  });
+});
+
+describe("stats page wiring", () => {
+  it("stats.html loads shared.js, then classify.js, then stats.js (bare-global order) and its stylesheet", () => {
+    const doc = parsePage("stats.html");
+    const srcs = [...doc.querySelectorAll("script[src]")].map((s) => s.getAttribute("src"));
+    expect(srcs).toEqual(["theme.js", "shared.js", "classify.js", "stats.js"]);
+    expect(doc.querySelector('link[rel="stylesheet"]').getAttribute("href")).toBe("stats.css");
+    for (const f of ["stats.js", "stats.css", "classify.js"]) expect(existsSync(join(root, f)), `${f} missing`).toBe(true);
+  });
+
+  it("stats.html has every element stats.js renders into", () => {
+    const doc = parsePage("stats.html");
+    for (const id of ["today", "totalActive", "totalDistraction", "totalProductive", "suggestBox", "suggestList", "siteList", "emptyToday", "trend"]) {
+      expect(doc.getElementById(id), `#${id} missing`).not.toBeNull();
+    }
+    expect(doc.querySelectorAll(".theme-toggle")).toHaveLength(1);
+  });
+
+  it("stats.js and classify.js are plain scripts that never assign innerHTML", () => {
+    for (const f of ["stats.js", "classify.js"]) {
+      const src = read(f);
+      expect(src).not.toMatch(/^\s*(import|export)\b/m);
+      expect(src, `${f} assigns innerHTML`).not.toMatch(/\.innerHTML\s*=/);
+    }
+  });
+
+  it("dashboard.html has the Daily stats button dashboard.js wires up", () => {
+    const btn = parsePage("dashboard.html").getElementById("statsBtn");
+    expect(btn).not.toBeNull();
+    expect(btn.tagName).toBe("BUTTON");
+    expect(btn.getAttribute("type")).toBe("button"); // must not submit the add-site form
+    expect(btn.textContent).toContain("Daily stats");
+  });
+
+  it("stats.css: :root[data-theme=\"light\"] redefines every variable the dark :root declares", () => {
+    const css = read("stats.css");
+    const grab = (re) => {
+      const m = css.match(new RegExp(re.source + "\\s*\\{([^}]*)\\}"));
+      return m ? new Set([...m[1].matchAll(/(--[\w-]+)\s*:/g)].map((x) => x[1])) : null;
+    };
+    const dark = grab(/:root/);
+    const light = grab(/:root\[data-theme="light"\]/);
+    expect(light).not.toBeNull();
+    expect(dark.size).toBeGreaterThan(0);
+    for (const v of dark) expect(light.has(v), `${v} has no light-mode value`).toBe(true);
   });
 });
 
