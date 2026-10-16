@@ -10,8 +10,6 @@
   --green: #34d399;
   --edge: rgba(255,255,255,0.09);
   --hover: rgba(255,255,255,0.14);
-  /* A barely-there fill for nested blocks (rule rows) inside a panel. */
-  --subtle: rgba(255,255,255,0.04);
   --locked-bg: rgba(248,113,113,0.12);
   --green-tint: rgba(52,211,153,0.18);
   --danger-tint: rgba(248,113,113,0.18);
@@ -30,7 +28,6 @@
   --green: #059669;
   --edge: rgba(0,0,0,0.10);
   --hover: rgba(0,0,0,0.06);
-  --subtle: rgba(0,0,0,0.04);
   --locked-bg: rgba(220,38,38,0.08);
   --green-tint: rgba(5,150,105,0.14);
   --danger-tint: rgba(220,38,38,0.12);
@@ -83,6 +80,7 @@ h2 {
   font-weight: 600;
   padding: 4px 10px;
   border-radius: 999px;
+  white-space: nowrap;
 }
 .pill.off { background: var(--edge); color: var(--muted); }
 .pill.on { background: var(--green-tint); color: var(--green); font-variant-numeric: tabular-nums; }
@@ -101,8 +99,9 @@ h2 {
   font-weight: 500;
   margin-top: 12px;
 }
-.budget-label input { width: 56px; text-align: right; margin-right: 4px; }
 .budget-label span { color: var(--muted); font-size: 13px; }
+.budget-fields { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.budget-fields input { width: 46px; margin-right: 2px; text-align: right; }
 .budget-label input:disabled { opacity: 0.45; cursor: not-allowed; }
 .budget-note { margin-top: 8px; font-size: 12px; color: var(--danger); }
 
@@ -137,8 +136,8 @@ h2 {
   border-radius: 8px;
   margin-bottom: 6px;
 }
-.site-list .domain { flex: 1; font-weight: 500; }
-.site-list .budget { color: var(--muted); font-size: 12px; }
+.site-list .domain { flex: 1; min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.site-list .budget { color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .site-list li.locked { background: var(--locked-bg); }
 .site-list li.locked .domain { color: var(--muted); text-decoration: line-through; }
 .site-list li.locked .budget { color: var(--danger); font-weight: 600; }
@@ -153,8 +152,6 @@ h2 {
 
 .add-form { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
 .add-form input[type="text"] { flex: 1; min-width: 0; }
-.add-form input[type="number"] { width: 54px; }
-.add-form .unit { color: var(--muted); font-size: 12px; }
 
 input {
   background: var(--panel);
@@ -173,7 +170,7 @@ button[type="submit"], .add-form button {
 }
 .add-form button:hover { background: var(--accent); }
 
-/* Popup-level actions (open the stats page) */
+/* Popup-level actions (open the stats page / the full dashboard) */
 .popup-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
 .stats-btn {
   width: 100%;
@@ -187,75 +184,3 @@ button[type="submit"], .add-form button {
   cursor: pointer;
 }
 .stats-btn:hover { border-color: var(--accent-dim); color: var(--accent); }
-
-/* Per-site rows: header line + collapsible editor */
-.site-list li { flex-wrap: wrap; }
-.site-list .row { display: flex; align-items: center; gap: 8px; width: 100%; }
-.site-list .edit {
-  background: none; border: none; color: var(--muted);
-  cursor: pointer; font-size: 13px; line-height: 1; padding: 0 4px;
-}
-.site-list .edit:hover, .site-list .edit[aria-expanded="true"] { color: var(--accent); }
-
-.site-editor {
-  width: 100%;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--edge);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--muted);
-}
-.site-editor label { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.site-editor label > span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; flex-shrink: 0; }
-.site-editor input[type="number"] { width: 56px; text-align: right; padding: 5px 6px; }
-.site-editor .lockout-min { width: 48px; }
-.site-editor select, .site-editor input[type="time"] {
-  background: var(--panel); color: var(--text);
-  border: 1px solid var(--edge); border-radius: 6px;
-  padding: 4px 6px; font-size: 12px;
-}
-.site-editor .lockout-min[hidden] { display: none; }
-.site-editor .locked-note { color: var(--danger); }
-.site-editor :disabled { opacity: 0.45; cursor: not-allowed; }
-
-.rules { display: flex; flex-direction: column; gap: 6px; }
-.rule-row {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 6px;
-  align-items: center;
-  padding: 6px;
-  background: var(--subtle);
-  border-radius: 6px;
-}
-.rule-row .times { display: flex; align-items: center; gap: 4px; grid-column: 1 / -1; }
-/* A just-changed rule that's still editable while the site is locked. */
-.rule-row.grace { outline: 1px dashed var(--accent-dim); }
-.days { display: flex; gap: 2px; }
-.day-toggle {
-  width: 22px; height: 22px; padding: 0;
-  border-radius: 999px; border: 1px solid var(--edge);
-  background: transparent; color: var(--muted); font-size: 10px; font-weight: 600; cursor: pointer;
-}
-.day-toggle[aria-pressed="true"] { background: var(--accent-dim); color: var(--on-accent); border-color: var(--accent-dim); }
-.rule-row .remove-rule { justify-self: end; }
-.add-rule {
-  align-self: flex-start;
-  background: none; border: 1px dashed var(--hover); color: var(--muted);
-  border-radius: 6px; padding: 4px 8px; cursor: pointer; font-size: 12px;
-}
-.add-rule:hover { color: var(--text); border-color: var(--accent-dim); }
-
-.settings label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 13px;
-  margin-bottom: 8px;
-}
-.settings input { width: 64px; text-align: right; }

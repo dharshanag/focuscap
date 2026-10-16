@@ -1053,6 +1053,50 @@ describe("background.js per-domain stats", () => {
     expect((await off.bg.handle({ type: "entering", hostname: "example.com" })).settings).toEqual({ idleEnabled: false, idleSeconds: 20 });
   });
 
+  it("on first install, onInstalled sets welcomed:true and opens options.html exactly once", async () => {
+    const { listeners, chrome, getStore } = await loadBackground({});
+    await listeners.onInstalled[0]({ reason: "install" });
+    expect(getStore().welcomed).toBe(true);
+    expect(chrome.tabs.create).toHaveBeenCalledTimes(1);
+    expect(chrome.tabs.create).toHaveBeenCalledWith({ url: "chrome-extension://test-extension-id/options.html" });
+
+    // A second "install" (e.g. a dev reload with storage intact) doesn't reopen it.
+    await listeners.onInstalled[0]({ reason: "install" });
+    expect(chrome.tabs.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("onInstalled does not open the options page on update, when already welcomed, or with no details", async () => {
+    const upd = await loadBackground({});
+    await upd.listeners.onInstalled[0]({ reason: "update" });
+    expect(upd.chrome.tabs.create).not.toHaveBeenCalled();
+    expect(upd.getStore().welcomed).toBeUndefined();
+
+    const seen = await loadBackground({ welcomed: true });
+    await seen.listeners.onInstalled[0]({ reason: "install" });
+    expect(seen.chrome.tabs.create).not.toHaveBeenCalled();
+
+    const bare = await loadBackground({});
+    await bare.listeners.onInstalled[0]();
+    expect(bare.chrome.tabs.create).not.toHaveBeenCalled();
+  });
+
+  it("a rejected tabs.create on first install is swallowed (defaults are still seeded)", async () => {
+    const { listeners, chrome, getStore } = await loadBackground({});
+    chrome.tabs.create = vi.fn(() => Promise.reject(new Error("no window")));
+    const rejections = [];
+    const onUnhandled = (r) => rejections.push(r);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await listeners.onInstalled[0]({ reason: "install" });
+      await flush();
+      expect(rejections).toHaveLength(0);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+    expect(getStore().welcomed).toBe(true);
+    expect(getStore().schedule).toEqual({ enabled: false, days: [0, 1, 2, 3, 4, 5, 6], windows: [], blackouts: [] });
+  });
+
   it("onInstalled seeds stats:{} and the idleEnabled default without clobbering existing keys", async () => {
     const { bg, listeners, getStore } = await loadBackground({ settings: { idleEnabled: false, idleSeconds: 30 } });
     void bg;

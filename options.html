@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Focus Cap — Dashboard</title>
+    <link rel="stylesheet" href="options.css" />
+    <script src="theme.js"></script>
+  </head>
+  <body>
+    <main class="wrap">
+      <header class="head">
+        <h1>Focus Cap</h1>
+        <div class="head-right">
+          <button class="theme-toggle" type="button" aria-label="Toggle light/dark">☀️</button>
+          <a id="statsLink" class="ghost-btn" href="#">📊 Daily stats</a>
+        </div>
+      </header>
+
+      <!-- First-run onboarding -->
+      <section id="onboard" class="card onboard" hidden>
+        <h2>👋 Welcome to Focus Cap</h2>
+        <p class="muted">
+          Focus Cap gives you a daily time budget for distracting sites, then blocks
+          them once it's spent — until tomorrow. Everything stays on your computer.
+        </p>
+        <div class="onboard-step">
+          <div class="step-label">1. Pick sites to limit</div>
+          <div id="presetSites" class="preset-grid"></div>
+        </div>
+        <div class="onboard-step">
+          <div class="step-label">2. Set your daily limit</div>
+          <div class="budget-fields">
+            <input id="obHours" type="number" min="0" max="2" step="1" value="0" /> h
+            <input id="obMinutes" type="number" min="0" max="59" step="1" value="30" /> m
+          </div>
+        </div>
+        <div class="onboard-actions">
+          <button id="obStart" class="primary-btn" type="button">Save &amp; get started</button>
+          <button id="obSkip" class="ghost-btn" type="button">Skip for now</button>
+        </div>
+      </section>
+
+      <div class="grid">
+        <!-- Blocked sites -->
+        <section class="card">
+          <h2>Blocked sites</h2>
+          <p class="muted">
+            Sites whose time counts against your daily limit. Open a site's ⚙ to
+            give it its own budget, cool-down and schedule.
+          </p>
+          <ul id="siteList" class="site-list"></ul>
+          <form id="addForm" class="add-form">
+            <input id="domainInput" type="text" placeholder="youtube.com" autocomplete="off" />
+            <button type="submit" class="primary-btn">Add</button>
+          </form>
+        </section>
+
+        <!-- Daily limit -->
+        <section class="card">
+          <h2>Daily limit</h2>
+          <p class="muted">Total active time allowed across all blocked sites (max 2h).</p>
+          <div id="remaining" class="remaining"></div>
+          <div class="bar"><div id="barFill" class="bar-fill"></div></div>
+          <label class="field-row">
+            Limit
+            <span class="budget-fields">
+              <input id="budgetHours" type="number" min="0" max="2" step="1" /> h
+              <input id="budgetMinutes" type="number" min="0" max="59" step="1" /> m
+            </span>
+          </label>
+          <div id="budgetNote" class="note" hidden>
+            Limit reached — you can't add time until tomorrow.
+          </div>
+        </section>
+      </div>
+
+      <!-- Schedule -->
+      <section class="card">
+        <div class="card-head">
+          <h2>Schedule</h2>
+          <label class="switch">
+            <input id="schedEnabled" type="checkbox" />
+            <span>Enable schedule</span>
+          </label>
+        </div>
+        <p class="muted">
+          Choose when the daily limit is enforced, and set blackout windows when
+          blocked sites are off-limits no matter how much budget is left.
+        </p>
+
+        <div id="schedBody">
+          <div class="sched-block">
+            <div class="block-label">Enforce the daily limit on these days</div>
+            <div id="enforceDays" class="day-row"></div>
+          </div>
+
+          <div class="sched-block">
+            <div class="block-label">
+              Only during these hours
+              <span class="muted">(leave empty = all day)</span>
+            </div>
+            <ul id="windowList" class="window-list"></ul>
+            <button id="addWindow" class="ghost-btn small" type="button">+ Add time window</button>
+          </div>
+
+          <div class="sched-block">
+            <div class="block-label">
+              🚫 Blackout windows
+              <span class="muted">(blocked sites fully off-limits)</span>
+            </div>
+            <ul id="blackoutList" class="blackout-list"></ul>
+            <button id="addBlackout" class="ghost-btn small" type="button">+ Add blackout</button>
+          </div>
+        </div>
+        <div id="schedOff" class="muted sched-off">
+          Schedule off — the daily limit is enforced 24/7.
+        </div>
+      </section>
+
+      <!-- Advanced -->
+      <section class="card">
+        <h2>Advanced</h2>
+        <label class="check-row">
+          <input id="idleEnabled" type="checkbox" />
+          <span>Pause the timer when I'm inactive</span>
+        </label>
+        <p class="muted">
+          When on, time stops counting after a stretch of no mouse/keyboard
+          activity, so stepping away doesn't burn your budget.
+        </p>
+        <label class="field-row" id="idleSecondsRow">
+          Pause after this many seconds of no activity
+          <span><input id="idleInput" type="number" min="5" step="5" /> s</span>
+        </label>
+        <div class="save-row">
+          <button id="saveAdvanced" class="primary-btn" type="button">Save</button>
+          <span id="advancedSaved" class="saved-msg" hidden>Saved ✓</span>
+        </div>
+      </section>
+    </main>
+
+    <script src="shared.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

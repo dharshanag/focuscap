@@ -7,7 +7,9 @@ site once its rules say so.
 ## What it does
 
 - Add distraction domains (e.g. `youtube.com`). Each site gets its own rules,
-  edited from the ⚙ next to it in the popup:
+  edited from the ⚙ next to it on the **Dashboard** (the options page —
+  **⚙️ Dashboard & schedule** in the popup, or `chrome://extensions` →
+  Details → Extension options):
   - a **daily budget** (default 30 min);
   - what happens **after the limit**: blocked until midnight, or a
     **cool-down** of N minutes after which the site gets a fresh allowance;
@@ -15,16 +17,16 @@ site once its rules say so.
     the site regardless of budget, and *allow-only* windows outside of which
     it's blocked. An active block window always wins; if a site has any allow
     windows, it's blocked outside all of them; otherwise budgets decide.
-- One **total cap, all sites** on top: a global daily limit across every
-  tracked site, whichever runs out first.
+- One **Daily limit** on top: a global cap (1 min – 2 h) across every tracked
+  site, whichever runs out first. Set from the popup or the Dashboard.
 - A **global schedule** over all of that (stored as `schedule`, off by
   default = always on): *enforcement days/windows* outside of which every
   site is free — the popup row reads "off-hours", no badge, nothing is
   charged to any budget (daily stats still accrue) — and *blackouts* during
   which every tracked site is blocked outright, whatever its budget. A
   blackout outranks everything; a site's own block/allow rules outrank
-  off-hours. The editing UI for the global schedule arrives with the options
-  page; until then it's set in storage.
+  off-hours. Edited in the Dashboard's **Schedule** card (enable, enforcement
+  days, time windows, blackouts with their own days).
 - No session to start. The rules are always in force.
 - A small **countdown badge** in the corner of each listed site shows how much
   time *that site* has left today (amber under 2 min, red under 1 min).
@@ -32,13 +34,13 @@ site once its rules say so.
   **you're not idle**. Recent input counts even if a browser menu or the
   Focus Cap popup briefly stole keyboard focus; a playing video counts only
   while the window is actually focused, so alt-tabbing away stops the drain.
-  Idle-pausing can be turned off (`settings.idleEnabled: false` in storage;
-  the options-page toggle for it is planned, not built yet), in which case
+  Idle-pausing can be turned off in the Dashboard's **Advanced** card (and
+  the idle threshold tuned there; both need an explicit Save), in which case
   all visible time counts. Background music in another tab never counts,
   because a backgrounded tab is hidden.
 - **Daily stats** for every site, not just the blocked ones: each page's
   engaged time is recorded per domain per day (`stats`, 14 days kept). The
-  popup's **📊 Daily stats** button opens a page with today's active /
+  **📊 Daily stats** button (popup and Dashboard) opens a page with today's active /
   distraction / productive totals, a per-site breakdown, a 7-day distraction
   trend, and "Consider blocking" suggestions (distraction sites with a minute
   or more today that you haven't blocked) with a one-click Block.
@@ -58,13 +60,15 @@ site once its rules say so.
 1. Open `chrome://extensions` (or `edge://extensions`).
 2. Toggle **Developer mode** on.
 3. Click **Load unpacked** and select this repo folder.
-4. Pin the extension, click it, add your sites, then open each site's ⚙ to
-   set its budget, cool-down and schedule (and adjust the total cap if you
-   like).
+4. On first install the Dashboard opens with a short onboarding (pick preset
+   sites, set the daily limit). Pin the extension and click it for the quick
+   view; open **⚙️ Dashboard & schedule** and each site's ⚙ to set its
+   budget, cool-down and schedule (and adjust the daily limit if you like).
 
-To test quickly: add a site, open its ⚙ and set its daily budget to `0.1` min
-(6 s), then actively scroll it — the block page should appear within seconds.
-Set "After limit" to "block for 1 min" to watch it unlock again.
+To test quickly: add a site, open its ⚙ on the Dashboard and set its daily
+budget to `0.1` min (6 s), then actively scroll it — the block page should
+appear within seconds. Set "After limit" to "block for 1 min" to watch it
+unlock again.
 
 ## Files
 
@@ -82,12 +86,17 @@ Set "After limit" to "block for 1 min" to watch it unlock again.
 - `shared.js` — the pure per-site evaluation (`matchSite`, `normalizeSite`,
   `normalizeUsage`, `evaluateSite`, per-site schedule-rule helpers, the
   global schedule's `scheduleStateAt` / `scheduleBlackoutUntil`) plus small
-  formatting helpers, shared by background.js / content.js / dashboard.js so
-  the popup, badge and enforcement can never disagree.
+  formatting helpers (`fmtClock`, `fmtUntil`, `describeStatus`, the 60 s
+  rule grace), shared by background.js / content.js / dashboard.js /
+  options.js so the popup, Dashboard, badge and enforcement can never
+  disagree.
 - `time-is-up.html/.js` — the standalone block page you're redirected to; it
   says why the site is locked and counts down to the actual unlock.
-- `dashboard.html/.css/.js` — the popup: total cap, per-site rows and the ⚙
-  per-site editor.
+- `dashboard.html/.css/.js` — the popup: daily limit, one status line per
+  site, add/remove, and buttons to the stats page and the Dashboard.
+- `options.html/.css/.js` — the Dashboard (options page): onboarding, the
+  blocked-sites list with each site's ⚙ editor (budget, cool-down, schedule
+  rules), the daily limit, the global schedule, and Advanced (idle pausing).
 - `test/` — Vitest + jsdom test suite (`npm test`); `.github/workflows/test.yml`
   runs it in CI.
 - `companion/` — a desktop menubar app (Electron) that shows a small,

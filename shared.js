@@ -1,7 +1,7 @@
-// Focus Cap -- small helpers shared by background.js, content.js, and dashboard.js.
+// Focus Cap -- small helpers shared by background.js, content.js, dashboard.js and options.js.
 // Loaded via importScripts() in the background service worker, as an extra
 // content_scripts entry (content scripts injected together share one global
-// scope), and as a <script> tag before dashboard.js in dashboard.html.
+// scope), and as a <script> tag before the page script in every HTML page.
 
 // Local calendar day of `date` as a zero-padded "YYYY-MM-DD" key. Zero
 // padding keeps the keys lexically sortable, which the stats pruning (and the
@@ -21,6 +21,55 @@ function fmtClock(ms) {
   const s = Math.max(0, Math.round(ms / 1000));
   const m = Math.floor(s / 60);
   return `${m}:${String(s % 60).padStart(2, "0")}`;
+}
+
+// parseInt that falls back only on NaN — an explicit "0" stays 0 instead of
+// being swallowed by a `|| fallback`.
+function parseIntOr(value, fallback) {
+  const n = parseInt(value, 10);
+  return Number.isNaN(n) ? fallback : n;
+}
+
+// "17:00" for a same-day timestamp, "midnight" for the upcoming local
+// midnight (the daily reset), "Thu 18:00" for anything else on another day.
+function fmtUntil(ms) {
+  if (typeof ms !== "number") return "";
+  if (ms === nextLocalMidnightMs()) return "midnight";
+  const d = new Date(ms);
+  const pad = (n) => String(n).padStart(2, "0");
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return d.toDateString() === new Date().toDateString() ? time : `${SCHED_DAY_ABBR[d.getDay()]} ${time}`;
+}
+
+// One line of status text for an evaluateSite() result, shared by the popup
+// rows and the options page so the two can never word a lock differently.
+function describeStatus(status) {
+  // Outside the global enforcement hours nothing is counted, so there's no
+  // countdown to show.
+  if (status.free) return "off-hours";
+  if (!status.locked) return `${fmtClock(status.remainingMs)} left`;
+  const until = status.until ? ` until ${fmtUntil(status.until)}` : "";
+  switch (status.reason) {
+    case "schedule":
+      return `🔒 scheduled${until}`;
+    case "global":
+      return `🔒 total cap reached${until}`;
+    default:
+      return `🔒 locked${until}`;
+  }
+}
+
+// A rule you just added or edited can still be changed or removed for this
+// long, even if it locked the site — anti-bypass shouldn't turn a fumble
+// (wrong hour, wrong day) into a multi-hour lockout. Anything older is
+// frozen while the site is locked, like every other setting.
+const RULE_GRACE_MS = 60 * 1000;
+function ruleInGrace(rule, now = Date.now()) {
+  if (!rule || typeof rule.touchedAt !== "number") return false;
+  const age = now - rule.touchedAt;
+  // A future-dated stamp (clock skew, hand-edited storage) must not be a
+  // perpetual grace.
+  return age >= 0 && age < RULE_GRACE_MS;
 }
 
 // ---- Per-site schedule rules ----
@@ -328,6 +377,11 @@ if (typeof module !== "undefined" && module.exports) {
     dayKey,
     todayKey,
     fmtClock,
+    parseIntOr,
+    fmtUntil,
+    describeStatus,
+    RULE_GRACE_MS,
+    ruleInGrace,
     parseHHMM,
     ruleActiveAt,
     scheduleVerdict,

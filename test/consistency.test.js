@@ -49,9 +49,10 @@ describe("todayKey()/fmtClock() stay consistent across background.js, dashboard.
     vi.resetModules();
     document.body.innerHTML = `
       <form id="addForm"><input id="domainInput" /></form>
-      <input id="budgetInput" /><input id="idleInput" />
+      <input id="budgetHours" /><input id="budgetMinutes" />
       <ul id="siteList"></ul><span id="statusPill"></span>
-      <div id="remaining"></div><div id="barFill"></div><div id="budgetNote"></div><button id="statsBtn"></button>
+      <div id="remaining"></div><div id="barFill"></div><div id="budgetNote"></div>
+      <button id="statsBtn"></button><button id="dashBtn"></button>
     `;
     vi.stubGlobal("chrome", createChromeMock({}).chrome);
     stubShared();
@@ -85,9 +86,10 @@ describe("todayKey()/fmtClock() stay consistent across background.js, dashboard.
     vi.resetModules();
     document.body.innerHTML = `
       <form id="addForm"><input id="domainInput" /></form>
-      <input id="budgetInput" /><input id="idleInput" />
+      <input id="budgetHours" /><input id="budgetMinutes" />
       <ul id="siteList"></ul><span id="statusPill"></span>
-      <div id="remaining"></div><div id="barFill"></div><div id="budgetNote"></div><button id="statsBtn"></button>
+      <div id="remaining"></div><div id="barFill"></div><div id="budgetNote"></div>
+      <button id="statsBtn"></button><button id="dashBtn"></button>
     `;
     vi.stubGlobal("chrome", createChromeMock({}).chrome);
     stubShared();

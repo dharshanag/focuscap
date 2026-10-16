@@ -151,7 +151,7 @@ function armStatsFlushTimer(now) {
 const get = (keys) => chrome.storage.local.get(keys);
 const set = (obj) => chrome.storage.local.set(obj);
 
-chrome.runtime.onInstalled.addListener(async () => {
+chrome.runtime.onInstalled.addListener(async (details) => {
   const cur = await get(Object.keys(DEFAULTS));
   const patch = {};
   for (const k of Object.keys(DEFAULTS)) {
@@ -159,6 +159,17 @@ chrome.runtime.onInstalled.addListener(async () => {
   }
   if (Object.keys(patch).length) await set(patch);
   scheduleMidnightAlarm();
+
+  // On first install, open the dashboard (options page) so the user can
+  // onboard. Guarded by a stored flag so it opens exactly once — not on
+  // every dev reload or update.
+  if (details && details.reason === "install") {
+    const { welcomed } = await get("welcomed");
+    if (!welcomed) {
+      await set({ welcomed: true });
+      chrome.tabs.create({ url: chrome.runtime.getURL("options.html") }).catch(() => {});
+    }
+  }
 });
 
 // The companion app (see companion/) only learns about lock state when the

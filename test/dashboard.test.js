@@ -1,25 +1,24 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { JSDOM } from "jsdom";
 import { createChromeMock, flush, stubSharedGlobals } from "./helpers/chrome-mock.js";
 
 // dashboard.js wires up its DOM listeners and calls load() as soon as it's
-// imported, so the required elements + chrome mock must exist first.
-function mountDashboardDom() {
-  document.body.innerHTML = `
-    <form id="addForm"><input id="domainInput" /></form>
-    <input id="budgetInput" />
-    <input id="idleInput" />
-    <ul id="siteList"></ul>
-    <span id="statusPill"></span>
-    <div id="remaining"></div>
-    <div id="barFill"></div>
-    <div id="budgetNote"></div>
-    <button id="statsBtn"></button>
-  `;
+// imported, so the real popup markup (minus script tags) + the chrome mock
+// must exist first. Mounting the real dashboard.html means a renamed id
+// breaks here, not only in the browser.
+function mountPopupDom() {
+  const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "dashboard.html"), "utf8");
+  const page = new JSDOM(html).window.document;
+  page.querySelectorAll("script").forEach((s) => s.remove());
+  document.body.innerHTML = page.body.innerHTML;
 }
 
 async function loadDashboard(initialStorage) {
   vi.resetModules();
-  mountDashboardDom();
+  mountPopupDom();
   const mock = createChromeMock(initialStorage);
   vi.stubGlobal("chrome", mock.chrome);
   stubSharedGlobals(await import("../shared.js"));
@@ -34,46 +33,37 @@ function localTodayKey(ms = Date.now()) {
 }
 
 const row = (domain) => document.querySelector(`#siteList li[data-domain="${domain}"]`);
+const el = (id) => document.getElementById(id);
+const setBudgetFields = (h, m) => {
+  el("budgetHours").value = h;
+  el("budgetMinutes").value = m;
+};
 
-describe("dashboard.js", () => {
+describe("dashboard.js (popup)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 
-  // --- Issue #2: parseInt(...) || default treats an explicit 0 as falsy ---
-  // https://github.com/dharshanag/focuscap/issues/2
-  it("saving idleSeconds=0 should clamp to the 5s minimum, not silently reset to the 45s default", async () => {
-    const { dash, getStore } = await loadDashboard({});
-    document.getElementById("idleInput").value = "0";
-    await dash.saveSettings();
-    expect(getStore().settings.idleSeconds).toBe(5);
+  it("removalLocked() forbids removal once locked or within the last 5 minutes of budget", async () => {
+    const { dash } = await loadDashboard({});
+    const budgetMs = 30 * 60 * 1000;
+    expect(dash.removalLocked(budgetMs, budgetMs)).toBe(true); // fully locked
+    expect(dash.removalLocked(budgetMs - 60_000, budgetMs)).toBe(true); // 1 min left
+    expect(dash.removalLocked(budgetMs - 10 * 60_000, budgetMs)).toBe(false); // 10 min left
+    expect(dash.removalLocked(60_000, 3 * 60_000)).toBe(false); // tiny budget: never locks removal early
   });
 
-  it("saves a normal idleSeconds value unchanged", async () => {
-    const { dash, getStore } = await loadDashboard({});
-    document.getElementById("idleInput").value = "30";
-    await dash.saveSettings();
-    expect(getStore().settings.idleSeconds).toBe(30);
+  it("normalizeDomain() strips protocol, www, path, and port", async () => {
+    const { dash } = await loadDashboard({});
+    expect(dash.normalizeDomain("https://www.YouTube.com/watch?v=1")).toBe("youtube.com");
+    expect(dash.normalizeDomain("reddit.com:443/r/all")).toBe("reddit.com");
   });
 
-  it("saving idleSeconds preserves an idleEnabled flag this popup doesn't edit", async () => {
-    const { dash, getStore } = await loadDashboard({ settings: { idleEnabled: false, idleSeconds: 45 } });
-    document.getElementById("idleInput").value = "30";
-    await dash.saveSettings();
-    expect(getStore().settings).toEqual({ idleEnabled: false, idleSeconds: 30 });
-  });
-
-  it("saving idleSeconds with no stored settings writes the full default shape (idleEnabled: true)", async () => {
-    const { dash, getStore } = await loadDashboard({});
-    document.getElementById("idleInput").value = "30";
-    await dash.saveSettings();
-    expect(getStore().settings).toEqual({ idleEnabled: true, idleSeconds: 30 });
-  });
-
+  // --- Buttons ---
   it("the Daily stats button opens stats.html in a new tab (and a rejected tabs.create is swallowed)", async () => {
     const { chrome } = await loadDashboard({});
-    document.getElementById("statsBtn").click();
+    el("statsBtn").click();
     await flush();
     expect(chrome.tabs.create).toHaveBeenCalledTimes(1);
     expect(chrome.tabs.create).toHaveBeenCalledWith({ url: "chrome-extension://test-extension-id/stats.html" });
@@ -83,7 +73,7 @@ describe("dashboard.js", () => {
     process.on("unhandledRejection", onUnhandled);
     try {
       chrome.tabs.create = () => Promise.reject(new Error("Tabs cannot be created in this context"));
-      document.getElementById("statsBtn").click();
+      el("statsBtn").click();
       await flush();
       expect(rejections).toHaveLength(0);
     } finally {
@@ -91,22 +81,128 @@ describe("dashboard.js", () => {
     }
   });
 
-  it("removalLocked() forbids removal once locked or within the last 5 minutes of budget", async () => {
-    const { dash } = await loadDashboard({});
-    const budgetMs = 30 * 60 * 1000;
-    expect(dash.removalLocked(budgetMs, budgetMs)).toBe(true); // fully locked
-    expect(dash.removalLocked(budgetMs - 60_000, budgetMs)).toBe(true); // 1 min left
-    expect(dash.removalLocked(budgetMs - 10 * 60_000, budgetMs)).toBe(false); // 10 min left
+  it("the Dashboard & schedule button opens the options page via chrome.runtime.openOptionsPage", async () => {
+    const { chrome } = await loadDashboard({});
+    el("dashBtn").click();
+    await flush();
+    expect(chrome.runtime.openOptionsPage).toHaveBeenCalledTimes(1);
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
   });
 
-  it("normalizeDomain() strips protocol, www, path, and port", async () => {
-    const { dash } = await loadDashboard({});
-    expect(dash.normalizeDomain("https://www.YouTube.com/watch?v=1")).toBe("youtube.com");
-    expect(dash.normalizeDomain("reddit.com:443/r/all")).toBe("reddit.com");
+  it("has no per-site editor or idle-seconds control (those live on the options page)", async () => {
+    await loadDashboard({ focusSites: [{ domain: "youtube.com" }] });
+    expect(document.querySelector(".site-editor")).toBeNull();
+    expect(document.querySelector(".edit")).toBeNull();
+    expect(el("idleInput")).toBeNull();
   });
 
-  // --- Per-site rules UI (phase 2) ---
-  describe("per-site rows", () => {
+  // --- Daily limit (global cap) in hours + minutes ---
+  describe("daily limit", () => {
+    it("renders the stored global cap as hours + minutes", async () => {
+      await loadDashboard({ budgetSeconds: 5400 });
+      expect(el("budgetHours").value).toBe("1");
+      expect(el("budgetMinutes").value).toBe("30");
+      expect(el("remaining").textContent).toBe("90:00 left today");
+      expect(el("statusPill").textContent).toBe("90:00");
+      expect(el("statusPill").className).toBe("pill on");
+    });
+
+    it("defaults to 30 minutes when nothing is stored", async () => {
+      await loadDashboard({});
+      expect(el("budgetHours").value).toBe("0");
+      expect(el("budgetMinutes").value).toBe("30");
+    });
+
+    it("saves hours + minutes as seconds", async () => {
+      const { dash, getStore } = await loadDashboard({ budgetSeconds: 1800 });
+      setBudgetFields("1", "15");
+      await dash.saveBudget();
+      expect(getStore().budgetSeconds).toBe(4500);
+    });
+
+    it("clamps to the 2-hour maximum and reflects the clamped value back into the fields", async () => {
+      const { dash, getStore } = await loadDashboard({ budgetSeconds: 1800 });
+      setBudgetFields("3", "45");
+      await dash.saveBudget();
+      expect(getStore().budgetSeconds).toBe(7200);
+      expect(el("budgetHours").value).toBe("2");
+      expect(el("budgetMinutes").value).toBe("0");
+    });
+
+    it("clamps to the 1-minute minimum (0h 0m can't zero the cap)", async () => {
+      const { dash, getStore } = await loadDashboard({ budgetSeconds: 1800 });
+      setBudgetFields("0", "0");
+      await dash.saveBudget();
+      expect(getStore().budgetSeconds).toBe(60);
+      expect(el("budgetMinutes").value).toBe("1");
+    });
+
+    it("treats a blank or non-numeric field as 0, not as a reason to skip the save", async () => {
+      const { dash, getStore } = await loadDashboard({ budgetSeconds: 1800 });
+      setBudgetFields("", "20");
+      await dash.saveBudget();
+      expect(getStore().budgetSeconds).toBe(1200);
+      setBudgetFields("1", "abc");
+      await dash.saveBudget();
+      expect(getStore().budgetSeconds).toBe(3600);
+    });
+
+    it("a change event on either field saves", async () => {
+      const { getStore } = await loadDashboard({ budgetSeconds: 1800 });
+      setBudgetFields("0", "45");
+      el("budgetMinutes").dispatchEvent(new Event("change"));
+      await flush();
+      expect(getStore().budgetSeconds).toBe(2700);
+      setBudgetFields("1", "45");
+      el("budgetHours").dispatchEvent(new Event("change"));
+      await flush();
+      expect(getStore().budgetSeconds).toBe(6300);
+    });
+
+    it("locks the fields once the cap is spent and refuses to raise it (reverting the fields)", async () => {
+      const { dash, getStore } = await loadDashboard({
+        focusSites: [{ domain: "youtube.com" }],
+        budgetSeconds: 60,
+        usage: { date: localTodayKey(), totalMs: 60_000, sites: { "youtube.com": { totalMs: 60_000 } } }
+      });
+      expect(el("remaining").textContent).toBe("🔒 Daily limit reached");
+      expect(el("statusPill").textContent).toBe("Locked");
+      expect(el("statusPill").className).toBe("pill locked");
+      expect(el("budgetHours").disabled).toBe(true);
+      expect(el("budgetMinutes").disabled).toBe(true);
+      expect(el("budgetNote").hidden).toBe(false);
+      expect(el("barFill").className).toBe("bar-fill full");
+      expect(row("youtube.com").querySelector(".budget").textContent).toMatch(/^🔒 /);
+
+      setBudgetFields("2", "0");
+      await dash.saveBudget();
+      await flush();
+      expect(getStore().budgetSeconds).toBe(60);
+      expect(el("budgetHours").value).toBe("0");
+      expect(el("budgetMinutes").value).toBe("1");
+    });
+
+    it("ignores yesterday's usage record (a stale date counts as 0 used)", async () => {
+      await loadDashboard({
+        budgetSeconds: 600,
+        usage: { date: "2000-01-01", totalMs: 600_000, sites: {} }
+      });
+      expect(el("remaining").textContent).toBe("10:00 left today");
+      expect(el("budgetHours").disabled).toBe(false);
+    });
+
+    it("warns (amber bar) past 75% of the cap", async () => {
+      await loadDashboard({
+        budgetSeconds: 600,
+        usage: { date: localTodayKey(), totalMs: 480_000, sites: {} }
+      });
+      expect(el("barFill").className).toBe("bar-fill warn");
+      expect(el("barFill").style.width).toBe("80%");
+    });
+  });
+
+  // --- Site rows: status text from the shared evaluation ---
+  describe("site rows", () => {
     it("renders each site's own remaining time from the shared evaluation, not the global cap", async () => {
       await loadDashboard({
         focusSites: [
@@ -118,14 +214,19 @@ describe("dashboard.js", () => {
       });
       expect(row("youtube.com").querySelector(".budget").textContent).toBe("9:00 left");
       expect(row("reddit.com").querySelector(".budget").textContent).toBe("2:00 left");
+      expect(row("youtube.com").classList.contains("locked")).toBe(false);
     });
 
-    it("shows a locked site as locked with its unlock time, and disables removal and editing", async () => {
-      // Fake only Date: the harness's flush() needs real setTimeout to fire.
+    it("shows the empty hint when there are no sites", async () => {
+      await loadDashboard({});
+      expect(document.querySelector("#siteList .empty").textContent).toMatch(/No sites yet/);
+    });
+
+    it("shows a cool-down-locked site with its unlock time and disables removal", async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(new Date(2026, 0, 14, 12, 0, 0));
       const lockedUntil = new Date(2026, 0, 14, 14, 30, 0).getTime();
-      const { dash } = await loadDashboard({
+      await loadDashboard({
         focusSites: [{ domain: "youtube.com", budgetSeconds: 60, lockoutSeconds: 9000 }],
         budgetSeconds: 3600,
         usage: { date: localTodayKey(), totalMs: 60_000, sites: { "youtube.com": { totalMs: 60_000, lockedUntil } } }
@@ -133,236 +234,79 @@ describe("dashboard.js", () => {
       const li = row("youtube.com");
       expect(li.classList.contains("locked")).toBe(true);
       expect(li.querySelector(".budget").textContent).toBe("🔒 locked until 14:30");
+      expect(li.querySelector(".budget").title).toBe("Out of time");
       expect(li.querySelector(".remove").disabled).toBe(true);
-
-      // Open the editor: everything in it is read-only while locked.
-      dash.expanded.add("youtube.com");
-      await dash.load();
-      const editor = row("youtube.com").querySelector(".site-editor");
-      expect(editor.querySelector(".locked-note")).not.toBeNull();
-      expect(editor.querySelector(".site-budget").disabled).toBe(true);
-      expect(editor.querySelector(".add-rule").disabled).toBe(true);
+      expect(li.querySelector(".remove").title).toBe("Can't remove while locked");
     });
 
-    it("describes schedule and global-cap locks distinctly", async () => {
-      const { dash } = await loadDashboard({});
-      expect(dash.describeStatus({ locked: true, reason: "schedule", until: null })).toBe("🔒 scheduled");
-      expect(dash.describeStatus({ locked: true, reason: "global", until: null })).toBe("🔒 total cap reached");
-      expect(dash.describeStatus({ locked: false, remainingMs: 90_000 })).toBe("1:30 left");
-    });
-
-    it("fmtUntil() says 'midnight' for the daily reset instead of a next-day clock time", async () => {
+    it("shows a budget-locked site as locked until midnight", async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(new Date(2026, 0, 14, 12, 0, 0));
-      const { dash } = await loadDashboard({});
-      expect(dash.fmtUntil(new Date(2026, 0, 15, 0, 0, 0, 0).getTime())).toBe("midnight");
-      expect(dash.fmtUntil(new Date(2026, 0, 14, 17, 0, 0, 0).getTime())).toBe("17:00");
-      expect(dash.fmtUntil(new Date(2026, 0, 15, 18, 0, 0, 0).getTime())).toBe("Thu 18:00");
-      expect(dash.describeStatus({ locked: true, reason: "budget", until: new Date(2026, 0, 15, 0, 0, 0, 0).getTime() })).toBe("🔒 locked until midnight");
-    });
-
-    it("clicking ⚙ opens the editor pre-filled with the site's current settings", async () => {
       await loadDashboard({
-        focusSites: [{ domain: "youtube.com", budgetSeconds: 900, lockoutSeconds: 7200, rules: [{ type: "allow", days: [0, 6], start: "10:00", end: "12:00" }] }],
-        budgetSeconds: 3600
-      });
-      row("youtube.com").querySelector(".edit").click();
-      await flush();
-      const editor = row("youtube.com").querySelector(".site-editor");
-      expect(editor).not.toBeNull();
-      expect(editor.querySelector(".site-budget").value).toBe("15");
-      expect(editor.querySelector(".lockout-mode").value).toBe("minutes");
-      expect(editor.querySelector(".lockout-min").value).toBe("120");
-      const rule = editor.querySelector(".rule-row");
-      expect(rule.querySelector(".rule-type").value).toBe("allow");
-      expect(rule.querySelector(".rule-start").value).toBe("10:00");
-      expect(rule.querySelector(".rule-end").value).toBe("12:00");
-      const pressed = [...rule.querySelectorAll(".day-toggle")].map((b) => b.getAttribute("aria-pressed"));
-      expect(pressed).toEqual(["true", "false", "false", "false", "false", "false", "true"]);
-    });
-
-    it("changing the per-site budget input persists it (in seconds) and leaves other sites alone", async () => {
-      const { dash, getStore } = await loadDashboard({
-        focusSites: [{ domain: "youtube.com" }, { domain: "reddit.com", budgetSeconds: 300 }],
-        budgetSeconds: 3600
-      });
-      dash.expanded.add("youtube.com");
-      await dash.load();
-      const input = row("youtube.com").querySelector(".site-budget");
-      input.value = "12.5";
-      input.dispatchEvent(new Event("change"));
-      await flush();
-      const sites = getStore().focusSites;
-      expect(sites[0].budgetSeconds).toBe(750);
-      expect(sites[0]).toEqual({ domain: "youtube.com", budgetSeconds: 750, lockoutSeconds: null, rules: [] });
-      expect(sites[1].budgetSeconds).toBe(300);
-    });
-
-    it("switching lockout mode persists minutes-as-seconds, and back to 'until midnight' as null", async () => {
-      const { dash, getStore } = await loadDashboard({
-        focusSites: [{ domain: "youtube.com" }],
-        budgetSeconds: 3600
-      });
-      dash.expanded.add("youtube.com");
-      await dash.load();
-      let editor = row("youtube.com").querySelector(".site-editor");
-      const mode = editor.querySelector(".lockout-mode");
-      editor.querySelector(".lockout-min").value = "90";
-      mode.value = "minutes";
-      mode.dispatchEvent(new Event("change"));
-      await flush();
-      expect(getStore().focusSites[0].lockoutSeconds).toBe(5400);
-
-      editor = row("youtube.com").querySelector(".site-editor");
-      const mode2 = editor.querySelector(".lockout-mode");
-      mode2.value = "midnight";
-      mode2.dispatchEvent(new Event("change"));
-      await flush();
-      expect(getStore().focusSites[0].lockoutSeconds).toBeNull();
-    });
-
-    it("adding, editing, toggling days on, and removing a schedule rule all persist", async () => {
-      // The default new rule blocks Mon-Fri 09:00-17:00. Pin the clock to a
-      // Wednesday evening so adding it doesn't lock the site (and therefore
-      // freeze its editor) partway through this test.
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(new Date(2026, 0, 14, 20, 0, 0));
-      const { dash, getStore } = await loadDashboard({
-        focusSites: [{ domain: "youtube.com" }],
-        budgetSeconds: 3600
-      });
-      dash.expanded.add("youtube.com");
-      await dash.load();
-
-      row("youtube.com").querySelector(".add-rule").click();
-      await flush();
-      expect(getStore().focusSites[0].rules).toEqual([
-        { type: "block", days: [1, 2, 3, 4, 5], start: "09:00", end: "17:00", touchedAt: Date.now() }
-      ]);
-
-      // While the rule is a block window that isn't active (it's 20:00), the
-      // site is unlocked and its editor is live.
-      let rule = row("youtube.com").querySelector(".rule-row");
-      rule.querySelectorAll(".day-toggle")[0].click(); // Sunday on
-      await flush();
-      expect(getStore().focusSites[0].rules[0].days).toEqual([0, 1, 2, 3, 4, 5]);
-
-      rule = row("youtube.com").querySelector(".rule-row");
-      const end = rule.querySelector(".rule-end");
-      end.value = "18:30";
-      end.dispatchEvent(new Event("change"));
-      await flush();
-      expect(getStore().focusSites[0].rules[0].end).toBe("18:30");
-
-      row("youtube.com").querySelector(".remove-rule").click();
-      await flush();
-      expect(getStore().focusSites[0].rules).toEqual([]);
-
-      // Switching a rule to "allow only" at 20:00 immediately locks the site
-      // (outside its window). The edit persists and the editor freezes —
-      // except the just-changed rule itself, which stays live for its grace
-      // window so a fumble can be undone.
-      row("youtube.com").querySelector(".add-rule").click();
-      await flush();
-      rule = row("youtube.com").querySelector(".rule-row");
-      const type = rule.querySelector(".rule-type");
-      type.value = "allow";
-      type.dispatchEvent(new Event("change"));
-      await flush();
-      expect(getStore().focusSites[0].rules[0].type).toBe("allow");
-      expect(row("youtube.com").classList.contains("locked")).toBe(true);
-      expect(row("youtube.com").querySelector(".site-budget").disabled).toBe(true);
-      expect(row("youtube.com").querySelector(".add-rule").disabled).toBe(true);
-      expect(row("youtube.com").querySelector(".rule-type").disabled).toBe(false);
-      expect(row("youtube.com").querySelector(".rule-row").classList.contains("grace")).toBe(true);
-    });
-
-    it("a just-added rule that locked the site can still be removed within 60s (undo a fumble); older rules can't", async () => {
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(new Date(2026, 0, 14, 10, 0, 0)); // Wed 10:00 — both rules below are active
-      const { dash, getStore } = await loadDashboard({
-        focusSites: [
-          {
-            domain: "youtube.com",
-            rules: [
-              { type: "block", days: [3], start: "09:00", end: "17:00", touchedAt: Date.now() - 2 * 60_000 }, // old
-              { type: "block", days: [3], start: "09:30", end: "12:00", touchedAt: Date.now() - 10_000 } // just added
-            ]
-          }
-        ],
-        budgetSeconds: 3600
-      });
-      dash.expanded.add("youtube.com");
-      await dash.load();
-      const rows = row("youtube.com").querySelectorAll(".rule-row");
-      expect(row("youtube.com").classList.contains("locked")).toBe(true);
-      expect(rows[0].querySelector(".remove-rule").disabled).toBe(true);
-      expect(rows[1].querySelector(".remove-rule").disabled).toBe(false);
-      expect(row("youtube.com").querySelector(".locked-note").textContent).toMatch(/stays editable/);
-
-      // Old rule: refused even via the API.
-      expect(await dash.updateSite("youtube.com", (s) => ({ ...s, rules: s.rules.slice(1) }), { ruleIndex: 0 })).toBe(false);
-      // Non-rule edits stay refused while locked.
-      expect(await dash.updateSite("youtube.com", (s) => ({ ...s, budgetSeconds: 999 }))).toBe(false);
-
-      rows[1].querySelector(".remove-rule").click();
-      await flush();
-      expect(getStore().focusSites[0].rules).toHaveLength(1);
-      expect(getStore().focusSites[0].rules[0].start).toBe("09:00");
-
-      // Once the grace window passes, the survivor is frozen too.
-      vi.setSystemTime(Date.now() + 61_000);
-      expect(dash.ruleInGrace({ touchedAt: Date.now() - 61_000 })).toBe(false);
-      // A future-dated stamp is not a perpetual grace.
-      expect(dash.ruleInGrace({ touchedAt: Date.now() + 5_000 })).toBe(false);
-    });
-
-    it("editing a rule that is still in grace refreshes its stamp (you keep only the rule you're actively fixing)", async () => {
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(new Date(2026, 0, 14, 10, 0, 0)); // Wed 10:00, rule below is active -> site locked
-      const { dash, getStore } = await loadDashboard({
-        focusSites: [{ domain: "youtube.com", rules: [{ type: "block", days: [3], start: "09:00", end: "17:00", touchedAt: Date.now() - 50_000 }] }],
-        budgetSeconds: 3600
-      });
-      dash.expanded.add("youtube.com");
-      await dash.load();
-      expect(row("youtube.com").classList.contains("locked")).toBe(true);
-      const end = row("youtube.com").querySelector(".rule-end");
-      expect(end.disabled).toBe(false);
-      end.value = "11:00";
-      end.dispatchEvent(new Event("change"));
-      await flush();
-      const saved = getStore().focusSites[0].rules[0];
-      expect(saved.end).toBe("11:00");
-      expect(saved.touchedAt).toBe(Date.now()); // refreshed from 50s-old
-      // 55s after the ORIGINAL stamp it would have expired; after the refresh it's still live.
-      vi.setSystemTime(Date.now() + 15_000);
-      await dash.load();
-      expect(row("youtube.com").querySelector(".rule-row").classList.contains("grace")).toBe(true);
-    });
-
-    it("updateSite() refuses to change a locked site (anti-bypass), re-checking live state", async () => {
-      const { dash, getStore } = await loadDashboard({
         focusSites: [{ domain: "youtube.com", budgetSeconds: 60 }],
         budgetSeconds: 3600,
         usage: { date: localTodayKey(), totalMs: 60_000, sites: { "youtube.com": { totalMs: 60_000 } } }
       });
-      const ok = await dash.updateSite("youtube.com", (s) => ({ ...s, budgetSeconds: 999_999 }));
-      expect(ok).toBe(false);
-      expect(getStore().focusSites[0].budgetSeconds).toBe(60);
+      expect(row("youtube.com").querySelector(".budget").textContent).toBe("🔒 locked until midnight");
     });
 
-    it("updateSite()/removeSite() are keyed by domain, so a concurrent removal can't redirect an edit to a neighbour", async () => {
-      const { dash, getStore, setStore } = await loadDashboard({
-        focusSites: [{ domain: "a.com" }, { domain: "b.com" }],
+    it("shows a schedule-locked site with the rule's end and names the rule in the hover text", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 0, 14, 10, 0, 0)); // Wed 10:00, inside the block window
+      await loadDashboard({
+        focusSites: [{ domain: "youtube.com", rules: [{ type: "block", days: [3], start: "09:00", end: "17:00" }] }],
         budgetSeconds: 3600
       });
-      // Simulate another popup removing a.com after b.com's editor was rendered.
-      setStore({ focusSites: [{ domain: "b.com" }] });
-      const ok = await dash.updateSite("b.com", (s) => ({ ...s, budgetSeconds: 600 }));
-      expect(ok).toBe(true);
-      expect(getStore().focusSites).toEqual([{ domain: "b.com", budgetSeconds: 600, lockoutSeconds: null, rules: [] }]);
-      expect(await dash.updateSite("a.com", (s) => s)).toBe(false); // gone -> refused, nothing written
+      const li = row("youtube.com");
+      expect(li.querySelector(".budget").textContent).toBe("🔒 scheduled until 17:00");
+      expect(li.querySelector(".budget").title).toBe("Blocked by a schedule rule");
+      expect(li.querySelector(".remove").disabled).toBe(true);
+    });
+
+    it("disables removal in the last 5 minutes of a site's budget with a reason, but not with plenty left", async () => {
+      await loadDashboard({
+        focusSites: [
+          { domain: "youtube.com", budgetSeconds: 1800 },
+          { domain: "reddit.com", budgetSeconds: 1800 }
+        ],
+        budgetSeconds: 7200,
+        usage: { date: localTodayKey(), totalMs: 1_560_000, sites: { "youtube.com": { totalMs: 1_560_000 } } }
+      });
+      const yt = row("youtube.com").querySelector(".remove");
+      expect(yt.disabled).toBe(true);
+      expect(yt.title).toBe("Can't remove in the last 5 minutes of its budget");
+      const rd = row("reddit.com").querySelector(".remove");
+      expect(rd.disabled).toBe(false);
+      expect(rd.title).toBe("Remove");
+    });
+  });
+
+  // --- Add / remove ---
+  describe("add and remove", () => {
+    it("adding a site stores it with per-site defaults filled in and clears the field", async () => {
+      const { dash, getStore } = await loadDashboard({ budgetSeconds: 3600 });
+      el("domainInput").value = "https://www.Reddit.com/r/all";
+      await dash.addSite({ preventDefault() {} });
+      expect(getStore().focusSites).toEqual([{ domain: "reddit.com", budgetSeconds: 1800, lockoutSeconds: null, rules: [] }]);
+      expect(el("domainInput").value).toBe("");
+      await flush();
+      expect(row("reddit.com")).not.toBeNull();
+    });
+
+    it("submitting the form adds the site; duplicates and blanks are ignored", async () => {
+      const { getStore } = await loadDashboard({ focusSites: [{ domain: "reddit.com" }] });
+      el("domainInput").value = "reddit.com";
+      el("addForm").dispatchEvent(new Event("submit", { cancelable: true }));
+      await flush();
+      expect(getStore().focusSites).toHaveLength(1);
+      el("domainInput").value = "   ";
+      el("addForm").dispatchEvent(new Event("submit", { cancelable: true }));
+      await flush();
+      expect(getStore().focusSites).toHaveLength(1);
+      el("domainInput").value = "news.ycombinator.com";
+      el("addForm").dispatchEvent(new Event("submit", { cancelable: true }));
+      await flush();
+      expect(getStore().focusSites.map((s) => s.domain)).toEqual(["reddit.com", "news.ycombinator.com"]);
     });
 
     it("removeSite() refuses while the site is locked but allows an unlocked site with plenty left", async () => {
@@ -380,57 +324,61 @@ describe("dashboard.js", () => {
       expect(getStore().focusSites.map((s) => s.domain)).toEqual(["youtube.com"]);
     });
 
+    it("removeSite() refuses in the last 5 minutes of the site's budget even though the row was rendered earlier", async () => {
+      const { dash, getStore, setStore } = await loadDashboard({
+        focusSites: [{ domain: "youtube.com", budgetSeconds: 1800 }],
+        budgetSeconds: 7200
+      });
+      expect(row("youtube.com").querySelector(".remove").disabled).toBe(false);
+      // Usage ticks past the threshold after render; the live check still refuses.
+      setStore({ usage: { date: localTodayKey(), totalMs: 1_560_000, sites: { "youtube.com": { totalMs: 1_560_000 } } } });
+      await dash.removeSite("youtube.com");
+      expect(getStore().focusSites).toHaveLength(1);
+    });
+
     it("removeSite() refuses a schedule-locked site even with zero usage (lock check, not just budget math)", async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(new Date(2026, 0, 14, 10, 0, 0)); // Wed 10:00, inside the block window
+      vi.setSystemTime(new Date(2026, 0, 14, 10, 0, 0));
       const { dash, getStore } = await loadDashboard({
         focusSites: [{ domain: "youtube.com", rules: [{ type: "block", days: [3], start: "09:00", end: "17:00" }] }],
         budgetSeconds: 3600
       });
-      // A per-site block window (no global blackout) names the rule.
-      expect(row("youtube.com").querySelector(".budget").title).toBe("Blocked by a schedule rule");
       await dash.removeSite("youtube.com");
       expect(getStore().focusSites.map((s) => s.domain)).toEqual(["youtube.com"]);
     });
 
-    it("rejects a per-site budget of 0 (it would lock the site instantly with no way back) and renders despite a corrupt rule entry", async () => {
-      const { dash, getStore } = await loadDashboard({
-        focusSites: [{ domain: "youtube.com", budgetSeconds: 600, rules: [null, { type: "block", days: [1], start: "09:00", end: "10:00" }] }],
+    it("clicking × removes by domain, so a concurrent removal elsewhere can't delete a neighbour", async () => {
+      const { getStore, setStore } = await loadDashboard({
+        focusSites: [{ domain: "a.com" }, { domain: "b.com" }, { domain: "c.com" }],
         budgetSeconds: 3600
       });
-      dash.expanded.add("youtube.com");
-      await dash.load();
-      // The null rule was dropped at normalization; only the real one rendered.
-      expect(row("youtube.com").querySelectorAll(".rule-row")).toHaveLength(1);
-
-      const input = row("youtube.com").querySelector(".site-budget");
-      input.value = "0";
-      input.dispatchEvent(new Event("change"));
+      // The options page removed a.com after this popup rendered; b.com is now index 0.
+      setStore({ focusSites: [{ domain: "b.com" }, { domain: "c.com" }] });
+      row("c.com").querySelector(".remove").click();
       await flush();
-      expect(getStore().focusSites[0].budgetSeconds).toBe(600);
+      expect(getStore().focusSites.map((s) => s.domain)).toEqual(["b.com"]);
     });
+  });
 
-    it("adding a site stores it with per-site defaults filled in", async () => {
-      const { dash, getStore } = await loadDashboard({ budgetSeconds: 3600 });
-      document.getElementById("domainInput").value = "https://www.Reddit.com/r/all";
-      await dash.addSite({ preventDefault() {} });
-      expect(getStore().focusSites).toEqual([{ domain: "reddit.com", budgetSeconds: 1800, lockoutSeconds: null, rules: [] }]);
+  // --- Live refresh ---
+  it("re-renders on usage / focusSites / budgetSeconds / schedule changes in local storage only", async () => {
+    const { listeners, setStore } = await loadDashboard({
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 600 }],
+      budgetSeconds: 3600
     });
-
-    it("the header shows the global cap, and the global-cap field locks once the cap is spent", async () => {
-      await loadDashboard({
-        focusSites: [{ domain: "youtube.com" }],
-        budgetSeconds: 60,
-        usage: { date: localTodayKey(), totalMs: 60_000, sites: { "youtube.com": { totalMs: 60_000 } } }
-      });
-      expect(document.getElementById("remaining").textContent).toBe("🔒 Total cap reached");
-      expect(document.getElementById("budgetInput").disabled).toBe(true);
-      expect(row("youtube.com").querySelector(".budget").textContent).toMatch(/^🔒 /);
-    });
+    expect(row("youtube.com").querySelector(".budget").textContent).toBe("10:00 left");
+    const usage = { date: localTodayKey(), totalMs: 60_000, sites: { "youtube.com": { totalMs: 60_000 } } };
+    setStore({ usage });
+    listeners.onChanged.forEach((fn) => fn({ usage: { newValue: usage } }, "sync"));
+    await flush();
+    expect(row("youtube.com").querySelector(".budget").textContent).toBe("10:00 left"); // wrong area: ignored
+    listeners.onChanged.forEach((fn) => fn({ usage: { newValue: usage } }, "local"));
+    await flush();
+    expect(row("youtube.com").querySelector(".budget").textContent).toBe("9:00 left");
   });
 });
 
-// --- Global schedule: off-hours rows and blackout rows. ---
+// --- Global schedule: the header pill and rows must agree with the background. ---
 describe("dashboard.js global schedule", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -440,7 +388,7 @@ describe("dashboard.js global schedule", () => {
   const allDays = [0, 1, 2, 3, 4, 5, 6];
   const officeHours = { enabled: true, days: allDays, windows: [{ start: "09:00", end: "17:00" }], blackouts: [] };
 
-  it("off-hours a site's row reads 'off-hours' (no countdown), isn't locked, and can be removed", async () => {
+  it("off-hours: the pill reads 'off-hours', rows show no countdown, nothing is locked, removal works", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(2026, 0, 14, 20, 0, 0)); // Wed 20:00, outside 09:00-17:00
     const { dash, getStore } = await loadDashboard({
@@ -454,20 +402,29 @@ describe("dashboard.js global schedule", () => {
     expect(li.querySelector(".budget").textContent).toBe("off-hours");
     expect(li.querySelector(".budget").title).toMatch(/enforcement hours/);
     expect(li.querySelector(".remove").disabled).toBe(false);
-    expect(dash.describeStatus({ locked: false, free: true, remainingMs: 600_000 })).toBe("off-hours");
-    // The header agrees with the rows instead of advertising a countdown
-    // that isn't running.
-    expect(document.getElementById("remaining").textContent).toBe("Off-hours — nothing is counted");
-    expect(document.getElementById("statusPill").textContent).toBe("Off");
-    expect(document.getElementById("statusPill").className).toBe("pill off");
-    // The total-cap field is still editable off-hours (the cap isn't spent).
-    expect(document.getElementById("budgetInput").disabled).toBe(false);
+    expect(el("remaining").textContent).toBe("Off-hours — nothing is counted");
+    expect(el("statusPill").textContent).toBe("off-hours");
+    expect(el("statusPill").className).toBe("pill off");
+    // The total-cap fields are still editable off-hours (the cap isn't spent).
+    expect(el("budgetHours").disabled).toBe(false);
 
     await dash.removeSite("youtube.com");
     expect(getStore().focusSites).toEqual([]);
   });
 
-  it("inside the enforcement window the row shows the countdown as before", async () => {
+  it("a non-enforcement day is off-hours too, even with no windows", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 0, 17, 12, 0, 0)); // Saturday
+    await loadDashboard({
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 600 }],
+      budgetSeconds: 3600,
+      schedule: { enabled: true, days: [1, 2, 3, 4, 5], windows: [], blackouts: [] }
+    });
+    expect(el("statusPill").textContent).toBe("off-hours");
+    expect(row("youtube.com").querySelector(".budget").textContent).toBe("off-hours");
+  });
+
+  it("inside the enforcement window the countdown shows as usual", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(2026, 0, 14, 12, 0, 0));
     await loadDashboard({
@@ -477,11 +434,24 @@ describe("dashboard.js global schedule", () => {
       schedule: officeHours
     });
     expect(row("youtube.com").querySelector(".budget").textContent).toBe("9:00 left");
-    expect(document.getElementById("remaining").textContent).toBe("59:00 left in total cap");
-    expect(document.getElementById("statusPill").className).toBe("pill on");
+    expect(el("remaining").textContent).toBe("59:00 left today");
+    expect(el("statusPill").textContent).toBe("59:00");
+    expect(el("statusPill").className).toBe("pill on");
   });
 
-  it("during a global blackout every site reads as scheduled-locked until the blackout ends, and can't be removed or edited", async () => {
+  it("a disabled schedule enforces 24/7 (no off-hours pill at night)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 0, 14, 23, 0, 0));
+    await loadDashboard({
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 600 }],
+      budgetSeconds: 3600,
+      schedule: { ...officeHours, enabled: false }
+    });
+    expect(el("statusPill").className).toBe("pill on");
+    expect(row("youtube.com").querySelector(".budget").textContent).toBe("10:00 left");
+  });
+
+  it("during a global blackout the header and every row read as locked until the blackout ends", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(2026, 0, 14, 12, 0, 0));
     const { dash, getStore } = await loadDashboard({
@@ -493,34 +463,28 @@ describe("dashboard.js global schedule", () => {
       const li = row(domain);
       expect(li.classList.contains("locked")).toBe(true);
       expect(li.querySelector(".budget").textContent).toBe("🔒 scheduled until 13:30");
-      // No per-site rule is involved, and the hover text says so.
       expect(li.querySelector(".budget").title).toBe("Blocked by your global blackout");
       expect(li.querySelector(".remove").disabled).toBe(true);
     }
-    // The header reports the blackout rather than a live total-cap countdown.
-    expect(document.getElementById("remaining").textContent).toBe("🔒 Blackout until 13:30");
-    expect(document.getElementById("statusPill").textContent).toBe("Blackout");
-    expect(document.getElementById("statusPill").className).toBe("pill locked");
-    const ok = await dash.updateSite("youtube.com", (s) => ({ ...s, budgetSeconds: 60_000 }));
-    expect(ok).toBe(false);
-    expect(getStore().focusSites[0].budgetSeconds).toBe(600);
+    expect(el("remaining").textContent).toBe("🔒 Blackout until 13:30");
+    expect(el("statusPill").textContent).toBe("Blackout");
+    expect(el("statusPill").className).toBe("pill locked");
+    await dash.removeSite("youtube.com");
+    expect(getStore().focusSites).toHaveLength(2);
   });
 
-  it("a schedule change in storage re-renders the list (and is not swallowed by an open editor)", async () => {
+  it("a schedule change in storage re-renders the rows", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(2026, 0, 14, 20, 0, 0));
-    const { dash, listeners, setStore } = await loadDashboard({
+    const { listeners, setStore } = await loadDashboard({
       focusSites: [{ domain: "youtube.com", budgetSeconds: 600 }],
       budgetSeconds: 3600
     });
     expect(row("youtube.com").querySelector(".budget").textContent).toBe("10:00 left");
-    dash.expanded.add("youtube.com");
-    await dash.load();
-    row("youtube.com").querySelector(".site-budget").focus();
-
     setStore({ schedule: officeHours });
     listeners.onChanged.forEach((fn) => fn({ schedule: { newValue: officeHours } }, "local"));
     await flush();
     expect(row("youtube.com").querySelector(".budget").textContent).toBe("off-hours");
+    expect(el("statusPill").textContent).toBe("off-hours");
   });
 });

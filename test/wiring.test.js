@@ -39,6 +39,11 @@ describe("manifest.json", () => {
     }
   });
 
+  it("declares the options page (options.html, opened in a tab) and the file exists", () => {
+    expect(manifest.options_ui).toEqual({ page: "options.html", open_in_tab: true });
+    expect(existsSync(join(root, "options.html"))).toBe(true);
+  });
+
   it("keeps the gopinaath key, permissions, and content_scripts intact", () => {
     expect(typeof manifest.key).toBe("string");
     expect(manifest.permissions).toEqual(["storage", "webNavigation", "nativeMessaging", "alarms"]);
@@ -51,7 +56,7 @@ describe("manifest.json", () => {
 });
 
 describe("theme.js page wiring", () => {
-  for (const page of ["dashboard.html", "time-is-up.html", "stats.html"]) {
+  for (const page of ["dashboard.html", "time-is-up.html", "stats.html", "options.html"]) {
     it(`${page} loads theme.js in <head> before any other script`, () => {
       const doc = parsePage(page);
       const scripts = [...doc.querySelectorAll("script")];
@@ -137,6 +142,81 @@ describe("stats page wiring", () => {
     expect(light).not.toBeNull();
     expect(dark.size).toBeGreaterThan(0);
     for (const v of dark) expect(light.has(v), `${v} has no light-mode value`).toBe(true);
+  });
+});
+
+describe("options page wiring", () => {
+  it("options.html loads theme.js, then shared.js, then options.js (bare-global order) and its stylesheet", () => {
+    const doc = parsePage("options.html");
+    const srcs = [...doc.querySelectorAll("script[src]")].map((s) => s.getAttribute("src"));
+    expect(srcs).toEqual(["theme.js", "shared.js", "options.js"]);
+    expect(doc.querySelector('link[rel="stylesheet"]').getAttribute("href")).toBe("options.css");
+    for (const f of ["options.js", "options.css"]) expect(existsSync(join(root, f)), `${f} missing`).toBe(true);
+  });
+
+  it("options.html has every element options.js renders into or listens on", () => {
+    const doc = parsePage("options.html");
+    const ids = [
+      "statsLink", "onboard", "presetSites", "obHours", "obMinutes", "obStart", "obSkip",
+      "siteList", "addForm", "domainInput", "remaining", "barFill", "budgetHours", "budgetMinutes", "budgetNote",
+      "schedEnabled", "schedBody", "schedOff", "enforceDays", "windowList", "addWindow", "blackoutList", "addBlackout",
+      "idleEnabled", "idleInput", "idleSecondsRow", "saveAdvanced", "advancedSaved"
+    ];
+    for (const id of ids) expect(doc.getElementById(id), `#${id} missing`).not.toBeNull();
+    expect(doc.querySelectorAll(".theme-toggle")).toHaveLength(1);
+    // Buttons outside the add form must not accidentally submit anything.
+    for (const b of doc.querySelectorAll("button")) {
+      if (b.closest("form")) continue;
+      expect(b.getAttribute("type"), `<button id=${b.id}> needs type="button"`).toBe("button");
+    }
+  });
+
+  it("dashboard.html (popup) has the h/m limit fields and both action buttons, and no per-site editor controls", () => {
+    const doc = parsePage("dashboard.html");
+    for (const id of ["budgetHours", "budgetMinutes", "statsBtn", "dashBtn", "statusPill", "siteList", "addForm"]) {
+      expect(doc.getElementById(id), `#${id} missing`).not.toBeNull();
+    }
+    expect(doc.getElementById("dashBtn").getAttribute("type")).toBe("button");
+    expect(doc.getElementById("dashBtn").textContent).toMatch(/Dashboard/);
+    expect(doc.getElementById("idleInput")).toBeNull();
+    expect(doc.getElementById("budgetInput")).toBeNull();
+  });
+
+  it("dashboard.js and options.js are plain scripts that never assign innerHTML and keep no local todayKey/fmtClock/describeStatus/fmtUntil/ruleInGrace", () => {
+    for (const f of ["dashboard.js", "options.js"]) {
+      const src = read(f);
+      expect(src).not.toMatch(/^\s*(import|export)\b/m);
+      expect(src, `${f} assigns innerHTML`).not.toMatch(/\.innerHTML\s*=/);
+      for (const name of ["todayKey", "dayKey", "fmtClock", "describeStatus", "fmtUntil", "ruleInGrace", "parseIntOr"]) {
+        expect(src, `${name} duplicated in ${f}`).not.toMatch(new RegExp(`(function\\s+${name}\\b|\\b(const|let|var)\\s+${name}\\s*=)`));
+      }
+      // The falsy-zero parse pattern main had (parseInt(x) || default).
+      expect(src, `${f} uses parseInt(...) || fallback`).not.toMatch(/parseInt\([^)]*\)\s*\|\|/);
+    }
+    // The popup opens the options page through the proper API, not by URL.
+    expect(read("dashboard.js")).toContain("chrome.runtime.openOptionsPage()");
+  });
+
+  it("options.css: :root[data-theme=\"light\"] redefines every variable the dark :root declares, with no literal colours elsewhere", () => {
+    const css = read("options.css");
+    const grab = (re) => {
+      const m = css.match(new RegExp(re.source + "\\s*\\{([^}]*)\\}"));
+      return m ? new Set([...m[1].matchAll(/(--[\w-]+)\s*:/g)].map((x) => x[1])) : null;
+    };
+    const dark = grab(/:root/);
+    const light = grab(/:root\[data-theme="light"\]/);
+    expect(light).not.toBeNull();
+    expect(dark.size).toBeGreaterThan(0);
+    for (const v of dark) expect(light.has(v), `${v} has no light-mode value`).toBe(true);
+    expect(css).toMatch(/:root\[data-theme="light"\]\s*\{[^}]*color-scheme:\s*light/);
+    const body = css.replace(/:root(\[data-theme="light"\])?\s*\{[^}]*\}/g, "");
+    const literals = body.match(/(#[0-9a-f]{3,8}\b|rgba?\([^)]*\))/gi) || [];
+    expect(literals, "hard-coded colours outside :root").toEqual([]);
+    // The per-site editor styles moved here from the popup.
+    for (const sel of [".site-editor", ".rule-row", ".day-toggle", ".rule-row.grace", ".locked-note", ".add-rule"]) {
+      expect(css, `${sel} missing from options.css`).toContain(sel);
+    }
+    expect(read("dashboard.css"), "popup CSS still carries the per-site editor").not.toContain(".site-editor");
   });
 });
 

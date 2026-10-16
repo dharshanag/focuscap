@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { dayKey, fmtClock, todayKey } from "../shared.js";
+import { dayKey, describeStatus, fmtClock, fmtUntil, parseIntOr, RULE_GRACE_MS, ruleInGrace, todayKey } from "../shared.js";
 
 describe("shared.js", () => {
   describe("fmtClock()", () => {
@@ -20,6 +20,82 @@ describe("shared.js", () => {
 
     it("clamps negative input to 0:00", () => {
       expect(fmtClock(-5000)).toBe("0:00");
+    });
+  });
+
+  describe("parseIntOr()", () => {
+    it("keeps an explicit 0 instead of falling back (the `|| default` bug)", () => {
+      expect(parseIntOr("0", 45)).toBe(0);
+      expect(parseIntOr(0, 45)).toBe(0);
+    });
+
+    it("falls back only when the input isn't a number", () => {
+      expect(parseIntOr("", 45)).toBe(45);
+      expect(parseIntOr("abc", 45)).toBe(45);
+      expect(parseIntOr(undefined, 7)).toBe(7);
+      expect(parseIntOr("30", 45)).toBe(30);
+      expect(parseIntOr("12.9", 45)).toBe(12);
+    });
+  });
+
+  // --- Status wording shared by the popup rows and the options page. ---
+  describe("fmtUntil() / describeStatus()", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("fmtUntil() says 'midnight' for the daily reset, a clock time today, and 'Thu 18:00' on another day", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 0, 14, 12, 0, 0)); // Wed
+      expect(fmtUntil(new Date(2026, 0, 15, 0, 0, 0, 0).getTime())).toBe("midnight");
+      expect(fmtUntil(new Date(2026, 0, 14, 17, 0, 0, 0).getTime())).toBe("17:00");
+      expect(fmtUntil(new Date(2026, 0, 14, 9, 5, 0, 0).getTime())).toBe("09:05");
+      expect(fmtUntil(new Date(2026, 0, 15, 18, 0, 0, 0).getTime())).toBe("Thu 18:00");
+      expect(fmtUntil(null)).toBe("");
+      expect(fmtUntil(undefined)).toBe("");
+    });
+
+    it("describes schedule, global-cap and budget/lockout locks distinctly, with the unlock time", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 0, 14, 12, 0, 0));
+      expect(describeStatus({ locked: true, reason: "schedule", until: null })).toBe("🔒 scheduled");
+      expect(describeStatus({ locked: true, reason: "schedule", until: new Date(2026, 0, 14, 13, 30).getTime() })).toBe("🔒 scheduled until 13:30");
+      expect(describeStatus({ locked: true, reason: "global", until: null })).toBe("🔒 total cap reached");
+      expect(describeStatus({ locked: true, reason: "budget", until: new Date(2026, 0, 15, 0, 0, 0, 0).getTime() })).toBe("🔒 locked until midnight");
+      expect(describeStatus({ locked: true, reason: "lockout", until: new Date(2026, 0, 14, 14, 30).getTime() })).toBe("🔒 locked until 14:30");
+    });
+
+    it("shows a countdown when unlocked and 'off-hours' when the global schedule isn't enforcing", () => {
+      expect(describeStatus({ locked: false, remainingMs: 90_000 })).toBe("1:30 left");
+      expect(describeStatus({ locked: false, free: true, remainingMs: 600_000 })).toBe("off-hours");
+    });
+  });
+
+  describe("ruleInGrace()", () => {
+    it("is true only within RULE_GRACE_MS (60 s) after the rule was touched", () => {
+      const now = 1_700_000_000_000;
+      expect(RULE_GRACE_MS).toBe(60_000);
+      expect(ruleInGrace({ touchedAt: now - 10_000 }, now)).toBe(true);
+      expect(ruleInGrace({ touchedAt: now - 59_999 }, now)).toBe(true);
+      expect(ruleInGrace({ touchedAt: now - 60_000 }, now)).toBe(false);
+      expect(ruleInGrace({ touchedAt: now - 61_000 }, now)).toBe(false);
+    });
+
+    it("never grants grace to a future-dated stamp, a missing stamp, or a missing rule", () => {
+      const now = 1_700_000_000_000;
+      expect(ruleInGrace({ touchedAt: now + 5_000 }, now)).toBe(false);
+      expect(ruleInGrace({ type: "block" }, now)).toBe(false);
+      expect(ruleInGrace({ touchedAt: "recent" }, now)).toBe(false);
+      expect(ruleInGrace(null, now)).toBe(false);
+      expect(ruleInGrace(undefined)).toBe(false);
+    });
+
+    it("defaults `now` to the current clock", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 0, 14, 12, 0, 0));
+      expect(ruleInGrace({ touchedAt: Date.now() - 30_000 })).toBe(true);
+      expect(ruleInGrace({ touchedAt: Date.now() - 90_000 })).toBe(false);
+      vi.useRealTimers();
     });
   });
 
