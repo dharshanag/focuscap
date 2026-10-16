@@ -33,6 +33,8 @@
       h1 { font-size: 40px; font-weight: 800; margin: 0 0 14px; letter-spacing: -0.5px; }
       .domain { color: var(--accent); }
       p { font-size: 19px; opacity: 0.82; margin: 0; max-width: 520px; line-height: 1.55; }
+      #encouragement { margin-top: 14px; }
+      #encouragement:empty { display: none; }
       .reset {
         margin-top: 34px;
         font-size: 14px;
@@ -44,9 +46,10 @@
   </head>
   <body>
     <div class="lock">🔒</div>
-    <h1 id="heading">Blocked for the day</h1>
-    <p><span class="domain" id="domain">This site</span><span id="body"> is out of time for today. Go do the thing you meant to do.</span></p>
-    <div class="reset"><span id="resetLabel">Resets in</span> <b id="countdown">—</b></div>
+    <h1 id="headline">Blocked for the day</h1>
+    <p id="message"><span class="domain" id="domain">This site</span><span id="body"> is out of time for today. Go do the thing you meant to do.</span></p>
+    <p id="encouragement"></p>
+    <div class="reset" id="resetLine"><span id="resetLabel">Resets in</span> <b id="countdown">—</b></div>
     <script src="time-is-up.js"></script>
   </body>
 </html>

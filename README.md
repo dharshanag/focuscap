@@ -91,7 +91,8 @@ unlock again.
   options.js so the popup, Dashboard, badge and enforcement can never
   disagree.
 - `time-is-up.html/.js` — the standalone block page you're redirected to; it
-  says why the site is locked and counts down to the actual unlock.
+  says why the site is locked, counts down to the actual unlock, and from the
+  second block of the day onwards adds a short encouraging message.
 - `dashboard.html/.css/.js` — the popup: daily limit, one status line per
   site, add/remove, and buttons to the stats page and the Dashboard.
 - `options.html/.css/.js` — the Dashboard (options page): onboarding, the

@@ -252,6 +252,19 @@ describe("light-theme CSS overrides", () => {
     expect(literals, "hard-coded colours outside :root").toEqual([]);
   });
 
+  it("time-is-up.html: uses main's element ids and keeps the countdown inside #resetLine", () => {
+    const doc = parsePage("time-is-up.html");
+    for (const id of ["headline", "message", "domain", "body", "encouragement", "resetLine", "resetLabel", "countdown"]) {
+      expect(doc.getElementById(id), `#${id} missing`).not.toBeNull();
+    }
+    expect(doc.getElementById("countdown").closest("#resetLine")).not.toBeNull();
+    expect(doc.getElementById("domain").closest("#message")).not.toBeNull();
+    expect(doc.getElementById("encouragement").textContent).toBe("");
+    // time-is-up.js runs after the DOM exists: it's the last thing in <body>.
+    const scripts = [...doc.querySelectorAll("body script")].map((s) => s.getAttribute("src"));
+    expect(scripts).toEqual(["time-is-up.js"]);
+  });
+
   it("time-is-up.html: inline light-theme vars mirror the dark :root set", () => {
     const html = read("time-is-up.html");
     const style = (html.match(/<style>([\s\S]*?)<\/style>/) || [])[1];

@@ -1,16 +1,23 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { createChromeMock, flush } from "./helpers/chrome-mock.js";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const html = readFileSync(join(root, "time-is-up.html"), "utf8");
+const source = readFileSync(join(root, "time-is-up.js"), "utf8");
+// The real page body, minus its <script> tags (the test imports the module itself).
+const bodyMarkup = html.match(/<body>([\s\S]*?)<\/body>/)[1].replace(/<script[^>]*><\/script>/g, "");
 
 // Wed 2026-01-14 local time.
 const at = (h, m = 0, dayOffset = 0) => new Date(2026, 0, 14 + dayOffset, h, m, 0, 0).getTime();
+const TODAY = new Date(2026, 0, 14).toDateString();
+const YESTERDAY = new Date(2026, 0, 13).toDateString();
 
 async function loadPage(initialStorage) {
   vi.resetModules();
-  document.body.innerHTML = `
-    <h1 id="heading"></h1>
-    <p><span id="domain">This site</span><span id="body"></span></p>
-    <div><span id="resetLabel"></span> <b id="countdown">—</b></div>
-  `;
+  document.body.innerHTML = bodyMarkup;
   const mock = createChromeMock(initialStorage);
   vi.stubGlobal("chrome", mock.chrome);
   const page = await import("../time-is-up.js");
@@ -18,10 +25,19 @@ async function loadPage(initialStorage) {
   return { page, ...mock };
 }
 
+const text = (id) => document.getElementById(id).textContent;
+
 describe("time-is-up.js", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 0, 14, 12, 0, 0));
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
+    localStorage.clear();
   });
 
   describe("describeBlock()", () => {
@@ -81,26 +97,138 @@ describe("time-is-up.js", () => {
     expect(page.fmtCountdown(-5)).toBe("0m 00s");
   });
 
-  it("renders the blocked domain, reason and a countdown to the stored unlock time", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date(2026, 0, 14, 12, 0, 0));
-    await loadPage({
-      lastBlocked: "youtube.com",
-      lastBlockedReason: "lockout",
-      lastBlockedUntil: at(13, 30)
+  describe("rendering", () => {
+    it("renders the blocked domain, reason and a countdown to the stored unlock time", async () => {
+      await loadPage({
+        lastBlocked: "youtube.com",
+        lastBlockedReason: "lockout",
+        lastBlockedUntil: at(13, 30)
+      });
+      expect(text("domain")).toBe("youtube.com");
+      expect(text("headline")).toBe("Cooling down");
+      expect(text("message")).toBe("youtube.com is out of time for now. Go do the thing you meant to do.");
+      expect(text("resetLabel")).toBe("Back in");
+      expect(text("countdown")).toBe("1h 30m 00s");
+      expect(text("resetLine")).toBe("Back in 1h 30m 00s");
+      expect(document.title).toBe("youtube.com — cooling down");
     });
-    expect(document.getElementById("domain").textContent).toBe("youtube.com");
-    expect(document.getElementById("heading").textContent).toBe("Cooling down");
-    expect(document.getElementById("resetLabel").textContent).toBe("Back in");
-    expect(document.getElementById("countdown").textContent).toBe("1h 30m 00s");
-    expect(document.title).toBe("youtube.com — cooling down");
+
+    it("the countdown lives inside #resetLine so the whole line reads as one sentence", async () => {
+      await loadPage({ lastBlocked: "youtube.com", lastBlockedReason: "schedule", lastBlockedUntil: at(17) });
+      const countdown = document.getElementById("countdown");
+      expect(countdown.closest("#resetLine")).not.toBeNull();
+      expect(text("resetLine")).toBe("Unblocks in 5h 00m 00s");
+      expect(text("headline")).toBe("Blocked right now");
+    });
+
+    it("the global cap renders its own explanation and the midnight reset", async () => {
+      await loadPage({ lastBlocked: "reddit.com", lastBlockedReason: "global", lastBlockedUntil: null });
+      expect(text("headline")).toBe("Blocked for the day");
+      expect(text("message")).toMatch(/^reddit\.com is out of time — your total cap/);
+      expect(text("resetLine")).toBe("Resets in 12h 00m 00s");
+    });
+
+    it("a tab left open past the unlock time shows a plain 'go back' instead of a negative countdown", async () => {
+      await loadPage({ lastBlocked: "youtube.com", lastBlockedReason: "lockout", lastBlockedUntil: at(11) });
+      expect(text("resetLabel")).toBe("");
+      expect(text("countdown")).toBe("You can go back now.");
+      expect(text("resetLine").trim()).toBe("You can go back now.");
+    });
   });
 
-  it("a tab left open past the unlock time shows a plain 'go back' instead of a negative countdown", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date(2026, 0, 14, 12, 0, 0));
-    await loadPage({ lastBlocked: "youtube.com", lastBlockedReason: "lockout", lastBlockedUntil: at(11) });
-    expect(document.getElementById("resetLabel").textContent).toBe("");
-    expect(document.getElementById("countdown").textContent).toBe("You can go back now.");
+  describe("encouraging messages", () => {
+    it("exposes exactly main's seven messages", async () => {
+      const { page } = await loadPage({});
+      expect(page.MESSAGES).toEqual([
+        "You're doing amazing; Keep going!",
+        "Keep at it, and you'll be amazed at how far you've come.",
+        "Back to the grind — you've got this.",
+        "You're doing so good, you got this!",
+        "The more you work now, the less you'll stress later.",
+        "You know this isn't what you're supposed to be doing right now. You're doing great.",
+        "Lock in! You're doing awesome."
+      ]);
+    });
+
+    it("pickMessage(rng) maps the rng's [0,1) range over the whole list and never returns undefined", async () => {
+      const { page } = await loadPage({});
+      expect(page.pickMessage(() => 0)).toBe(page.MESSAGES[0]);
+      expect(page.pickMessage(() => 0.999999)).toBe(page.MESSAGES[6]);
+      expect(page.pickMessage(() => 3 / 7)).toBe(page.MESSAGES[3]);
+      // A broken rng is clamped rather than indexing off the end.
+      expect(page.pickMessage(() => 1)).toBe(page.MESSAGES[6]);
+      expect(page.pickMessage(() => -1)).toBe(page.MESSAGES[0]);
+      expect(page.pickMessage(() => NaN)).toBe(page.MESSAGES[0]);
+      // Default rng: always one of the seven.
+      for (let i = 0; i < 50; i++) expect(page.MESSAGES).toContain(page.pickMessage());
+    });
+
+    it("shouldEncourage() is false on the first view of a day and true from the second", async () => {
+      const { page } = await loadPage({});
+      expect(page.shouldEncourage({ views: null, viewsDay: null }, TODAY)).toBe(false);
+      expect(page.shouldEncourage({ views: "0", viewsDay: TODAY }, TODAY)).toBe(false);
+      expect(page.shouldEncourage({ views: "1", viewsDay: TODAY }, TODAY)).toBe(true);
+      expect(page.shouldEncourage({ views: "7", viewsDay: TODAY }, TODAY)).toBe(true);
+      // Yesterday's count doesn't carry over, however high it was.
+      expect(page.shouldEncourage({ views: "7", viewsDay: YESTERDAY }, TODAY)).toBe(false);
+      // Garbage in storage counts as zero rather than throwing or encouraging.
+      expect(page.shouldEncourage({ views: "lots", viewsDay: TODAY }, TODAY)).toBe(false);
+      expect(page.shouldEncourage(undefined, TODAY)).toBe(false);
+    });
+
+    it("bumpViews() stores the count as a string under today's key, exactly as main does", async () => {
+      const { page } = await loadPage({});
+      expect(page.bumpViews({ views: null, viewsDay: null }, TODAY)).toEqual({ views: "1", viewsDay: TODAY });
+      expect(page.bumpViews({ views: "3", viewsDay: TODAY }, TODAY)).toEqual({ views: "4", viewsDay: TODAY });
+      expect(page.bumpViews({ views: "3", viewsDay: YESTERDAY }, TODAY)).toEqual({ views: "1", viewsDay: TODAY });
+    });
+
+    it("the first block-page view of the day shows no encouragement and starts the counter", async () => {
+      await loadPage({ lastBlocked: "youtube.com", lastBlockedReason: "budget", lastBlockedUntil: null });
+      expect(text("encouragement")).toBe("");
+      expect(localStorage.getItem("views")).toBe("1");
+      expect(localStorage.getItem("viewsDay")).toBe(TODAY);
+      // The rest of the page still renders.
+      expect(text("headline")).toBe("Blocked for the day");
+      expect(text("countdown")).toBe("12h 00m 00s");
+    });
+
+    it("the second view of the day shows one of the seven messages and bumps the counter", async () => {
+      localStorage.setItem("views", "1");
+      localStorage.setItem("viewsDay", TODAY);
+      const { page } = await loadPage({ lastBlocked: "youtube.com", lastBlockedReason: "budget", lastBlockedUntil: null });
+      expect(page.MESSAGES).toContain(text("encouragement"));
+      expect(localStorage.getItem("views")).toBe("2");
+      expect(localStorage.getItem("viewsDay")).toBe(TODAY);
+    });
+
+    it("a new day resets the counter: yesterday's many views don't earn a message today", async () => {
+      localStorage.setItem("views", "9");
+      localStorage.setItem("viewsDay", YESTERDAY);
+      await loadPage({ lastBlocked: "youtube.com", lastBlockedReason: "budget", lastBlockedUntil: null });
+      expect(text("encouragement")).toBe("");
+      expect(localStorage.getItem("views")).toBe("1");
+      expect(localStorage.getItem("viewsDay")).toBe(TODAY);
+    });
+
+    it("the message is set as plain text, never parsed as markup", async () => {
+      localStorage.setItem("views", "1");
+      localStorage.setItem("viewsDay", TODAY);
+      const { page } = await loadPage({ lastBlocked: "youtube.com", lastBlockedReason: "budget", lastBlockedUntil: null });
+      const el = document.getElementById("encouragement");
+      // DOM content equals one of the raw strings and contains no element nodes.
+      expect(page.MESSAGES).toContain(el.textContent);
+      expect(el.childElementCount).toBe(0);
+      expect(el.childNodes).toHaveLength(1);
+      expect(el.firstChild.nodeType).toBe(Node.TEXT_NODE);
+      // And the source never assigns innerHTML from anything.
+      expect(source).not.toMatch(/innerHTML\s*=/);
+    });
+
+    it("a stored domain is rendered as text too (no markup injection via lastBlocked)", async () => {
+      await loadPage({ lastBlocked: "<b>evil</b>.com", lastBlockedReason: "budget", lastBlockedUntil: null });
+      expect(text("domain")).toBe("<b>evil</b>.com");
+      expect(document.getElementById("domain").childElementCount).toBe(0);
+    });
   });
 });
