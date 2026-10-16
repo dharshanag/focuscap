@@ -96,10 +96,19 @@ describe("theme.js", () => {
   });
 
   it("an explicit choice is not overridden by a later OS change", async () => {
-    const { document, media } = await loadTheme({ prefersDark: false, storage: { theme: "dark" } });
+    // Start with the OS agreeing with the stored pick, then flip the OS to the
+    // opposite value: the only thing keeping the theme on "dark" is the
+    // "ignore OS changes once the user has chosen" guard.
+    const { document, media } = await loadTheme({ prefersDark: true, storage: { theme: "dark" } });
     expect(themeOf(document)).toBe("dark");
     media.setPrefersDark(false);
     expect(themeOf(document)).toBe("dark");
+
+    // And the mirror image: a stored "light" pick survives the OS going dark.
+    const other = await loadTheme({ prefersDark: false, storage: { theme: "light" } });
+    expect(themeOf(other.document)).toBe("light");
+    other.media.setPrefersDark(true);
+    expect(themeOf(other.document)).toBe("light");
   });
 
   describe("clicking .theme-toggle", () => {
