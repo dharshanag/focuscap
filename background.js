@@ -185,7 +185,10 @@ const MIGRATIONS = [
       if (merged) patch.stats = merged;
     }
     if (Array.isArray(stored.focusSites)) {
-      const sites = stored.focusSites.map(normalizeSite);
+      // Materialise legacy { domain } entries with their defaults. Garbage
+      // entries (null, strings, no domain) used to be ignored at read time;
+      // don't bake them into storage as empty-domain sites — drop them.
+      const sites = stored.focusSites.map(normalizeSite).filter((s) => s.domain);
       if (JSON.stringify(sites) !== JSON.stringify(stored.focusSites)) patch.focusSites = sites;
     }
     return patch;
@@ -265,7 +268,9 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     if (cur[k] === undefined) patch[k] = DEFAULTS[k];
   }
   if (Object.keys(patch).length) await set(patch);
-  // Defaults first so a migration step can rely on every key existing.
+  // Defaults are seeded first, but a migration step must not rely on that:
+  // onStartup also fires migrateStorage() (concurrently, on a command-line
+  // loaded extension), so every step guards each key it touches.
   await migrateStorage();
   scheduleMidnightAlarm();
 

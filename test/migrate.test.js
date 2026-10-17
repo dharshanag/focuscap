@@ -112,6 +112,14 @@ describe("storage schema migration (issue #16)", () => {
     expect(getStore().schemaVersion).toBe(1);
   });
 
+  it("TC3: garbage focusSites entries are dropped by the migration, not persisted as empty-domain sites", async () => {
+    // Read-time normalisation used to ignore these; baking them into storage
+    // would render empty rows in the popup and Dashboard forever.
+    const { listeners, getStore } = await loadBackground(fullStore({ focusSites: [null, "junk", { nope: 1 }, { domain: "" }, { domain: "a.com" }] }));
+    await listeners.onInstalled[0]({ reason: "update" });
+    expect(getStore().focusSites).toEqual([{ domain: "a.com", budgetSeconds: 1800, lockoutSeconds: null, rules: [] }]);
+  });
+
   // TC4: a run on a store that is already current performs NO write at all
   // (so no storage.onChanged event fires, and the data is byte-identical).
   it("TC4: a second run on an up-to-date store performs zero chrome.storage.local.set() calls", async () => {
