@@ -10,7 +10,13 @@ const path = require("path");
 const STATE_DIR = path.join(os.homedir(), ".focuscap");
 const STATE_FILE = path.join(STATE_DIR, "state.json");
 
+// Version of the state.json layout. writeState() stamps it on every write
+// and readState() fills it in for a file written before it existed, so the
+// companion can tell which shape it is reading. Bump on incompatible changes.
+const STATE_SCHEMA_VERSION = 1;
+
 const DEFAULT_STATE = {
+  schemaVersion: STATE_SCHEMA_VERSION,
   locked: false, // true when ANY tracked site is currently locked
   remainingMs: 0,
   budgetMs: 0,
@@ -32,9 +38,10 @@ function readState() {
 
 function writeState(partial) {
   fs.mkdirSync(STATE_DIR, { recursive: true });
-  const next = { ...readState(), ...partial, updatedAt: Date.now() };
+  // The version marker is ours, never the caller's: a patch can't downgrade it.
+  const next = { ...readState(), ...partial, schemaVersion: STATE_SCHEMA_VERSION, updatedAt: Date.now() };
   fs.writeFileSync(STATE_FILE, JSON.stringify(next, null, 2));
   return next;
 }
 
-module.exports = { STATE_DIR, STATE_FILE, DEFAULT_STATE, readState, writeState };
+module.exports = { STATE_DIR, STATE_FILE, STATE_SCHEMA_VERSION, DEFAULT_STATE, readState, writeState };

@@ -17,6 +17,23 @@ function todayKey() {
   return dayKey(new Date());
 }
 
+// Version of the chrome.storage.local layout (see the storage layout and the
+// migration runner in background.js). Bump it whenever a stored shape
+// changes incompatibly, and add a step to background.js's MIGRATIONS that
+// rewrites the old shape in place. Every page can compare it with the
+// stored `schemaVersion` key.
+const SCHEMA_VERSION = 1;
+
+// "2026-9-5" -> "2026-09-05": day keys written before dayKey() zero-padded
+// them. Anything that isn't a YYYY-M-D / YYYY-MM-DD string comes back as-is
+// (never padded, never dropped) so a corrupt key is left for the caller.
+function padDayKey(key) {
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(key));
+  if (!m) return key;
+  const pad = (n) => n.padStart(2, "0");
+  return `${m[1]}-${pad(m[2])}-${pad(m[3])}`;
+}
+
 function fmtClock(ms) {
   const s = Math.max(0, Math.round(ms / 1000));
   const m = Math.floor(s / 60);
@@ -413,6 +430,8 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     dayKey,
     todayKey,
+    SCHEMA_VERSION,
+    padDayKey,
     fmtClock,
     parseIntOr,
     fmtUntil,

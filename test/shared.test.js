@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { dayKey, describeStatus, fmtClock, fmtUntil, parseIntOr, RULE_GRACE_MS, ruleInGrace, todayKey } from "../shared.js";
+import { dayKey, describeStatus, fmtClock, fmtUntil, padDayKey, parseIntOr, RULE_GRACE_MS, ruleInGrace, SCHEMA_VERSION, todayKey } from "../shared.js";
 
 describe("shared.js", () => {
   describe("fmtClock()", () => {
@@ -138,5 +138,22 @@ describe("shared.js", () => {
       const oct = todayKey();
       expect([oct, sep].sort()).toEqual([sep, oct]);
     });
+  });
+});
+
+describe("schema versioning helpers (issue #16)", () => {
+  it("SCHEMA_VERSION is a positive integer", () => {
+    expect(Number.isInteger(SCHEMA_VERSION)).toBe(true);
+    expect(SCHEMA_VERSION).toBeGreaterThan(0);
+  });
+
+  it("padDayKey() zero-pads legacy day keys and leaves everything else untouched", () => {
+    expect(padDayKey("2026-9-5")).toBe("2026-09-05");
+    expect(padDayKey("2026-10-5")).toBe("2026-10-05");
+    expect(padDayKey("2026-9-25")).toBe("2026-09-25");
+    expect(padDayKey("2026-09-05")).toBe("2026-09-05");
+    expect(padDayKey("junk")).toBe("junk");
+    expect(padDayKey("2026-9-5T00")).toBe("2026-9-5T00");
+    expect(padDayKey(42)).toBe(42);
   });
 });

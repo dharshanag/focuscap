@@ -11,6 +11,30 @@
 // intentionally plain Node for the initial MVP.
 const { writeState } = require("../state-store");
 
+// Every reply carries the host's own version and the wire protocol version
+// it speaks, so the extension can spot a stale or too-new host (GitHub
+// issue #12, phase 1: the extension only warns on a mismatch for now).
+// HOST_VERSION tracks the repo's package.json; PROTOCOL_VERSION is bumped
+// by hand whenever the message shapes change incompatibly.
+const PROTOCOL_VERSION = 1;
+const HOST_VERSION = (() => {
+  try {
+    const v = require("../package.json").version;
+    return typeof v === "string" && v ? v : "0.1.0";
+  } catch (_) {
+    return "0.1.0";
+  }
+})();
+
+// The reply to one frame: { ok: true, version, protocolVersion } on success,
+// { ok: false, error, version, protocolVersion } when the frame couldn't be
+// parsed or written. Pure so the shape is unit-testable without stdio.
+function buildReply(err) {
+  const base = { version: HOST_VERSION, protocolVersion: PROTOCOL_VERSION };
+  if (!err) return { ok: true, ...base };
+  return { ok: false, error: String(err && err.message), ...base };
+}
+
 // Pulls complete length-prefixed frames out of a buffer that may hold zero,
 // one, or several messages (plus a trailing partial one still being
 // received). Pure and stateless so it's testable without a real stdin.
@@ -90,9 +114,9 @@ function runStdioLoop() {
       let response;
       try {
         writeState(sanitizeStatePatch(JSON.parse(frame.toString("utf8"))));
-        response = { ok: true };
+        response = buildReply(null);
       } catch (err) {
-        response = { ok: false, error: String(err && err.message) };
+        response = buildReply(err || new Error("unknown error"));
       }
       process.stdout.write(encodeFrame(response));
     }
@@ -109,4 +133,4 @@ if (require.main === module) {
   runStdioLoop();
 }
 
-module.exports = { extractFrames, encodeFrame, sanitizeStatePatch, sanitizeSites };
+module.exports = { extractFrames, encodeFrame, sanitizeStatePatch, sanitizeSites, buildReply, HOST_VERSION, PROTOCOL_VERSION };

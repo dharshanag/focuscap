@@ -8,13 +8,16 @@
 if (typeof importScripts === "function") importScripts("shared.js");
 
 // Storage layout (chrome.storage.local):
+//   schemaVersion: integer, SCHEMA_VERSION (shared.js) once migrateStorage()
+//     below has run; absent on installs that predate it (treated as 0)
 //   focusSites: [{ domain, budgetSeconds, lockoutSeconds, rules }]
 //     budgetSeconds  — this site's own daily allowance
 //     lockoutSeconds — how long the site stays blocked after exhausting its
 //                      budget; null = until local midnight
 //     rules          — [{ type: "block"|"allow", days, start, end }], see shared.js
-//     (older entries with only { domain } are normalized to SITE_DEFAULTS at
-//     read time, so no explicit migration step is needed)
+//     (entries saved as a bare { domain } before per-site rules existed are
+//     rewritten to this shape by the v0 -> v1 migration; normalizeSite()
+//     still fills defaults at read time as a safety net)
 //   budgetSeconds: the GLOBAL cap across all sites per day (the key predates
 //     per-site budgets and already meant "total across all sites")
 //   usage: { date, totalMs, sites: { [domain]: { totalMs, lastTickAt, lockedUntil } } }
@@ -151,6 +154,110 @@ function armStatsFlushTimer(now) {
 const get = (keys) => chrome.storage.local.get(keys);
 const set = (obj) => chrome.storage.local.set(obj);
 
+// ---- Storage schema migration ----
+//
+// MIGRATIONS[n] upgrades a store at schemaVersion n to n + 1 — a pure
+// function of the stored keys it cares about that returns only the keys it
+// changed (an empty object when the data already has the new shape, so an
+// install whose data happens to be current gets just the version stamp).
+// migrateStorage() runs them in order from the stored version (absent =
+// 0) up to SCHEMA_VERSION and writes the union plus the new version in ONE
+// set() — or nothing at all when the version already matches, so a routine
+// startup never emits a storage.onChanged event. A store stamped with a
+// version NEWER than this build (a downgrade) is left untouched: the
+// read-time normalizers (normalizeSite / normalizeUsage) keep enforcement
+// working on whatever shape they find, and we warn rather than guess.
+const MIGRATIONS = [
+  // v0 -> v1: day keys became zero-padded (stats/usage written as
+  // "2026-9-5" would otherwise sort out of order and, for usage, be read as
+  // "not today" — wiping today's usage on the first run of the padded
+  // build); and legacy { domain }-only sites get their defaults persisted.
+  function v0ToV1(stored) {
+    const patch = {};
+    const usage = stored.usage;
+    if (usage && typeof usage === "object" && typeof usage.date === "string") {
+      const date = padDayKey(usage.date);
+      if (date !== usage.date) patch.usage = { ...usage, date };
+    }
+    const stats = stored.stats;
+    if (stats && typeof stats === "object" && !Array.isArray(stats)) {
+      const merged = mergePaddedStats(stats);
+      if (merged) patch.stats = merged;
+    }
+    if (Array.isArray(stored.focusSites)) {
+      const sites = stored.focusSites.map(normalizeSite);
+      if (JSON.stringify(sites) !== JSON.stringify(stored.focusSites)) patch.focusSites = sites;
+    }
+    return patch;
+  }
+];
+
+// Rewrite every legacy day key in a stats object to its padded form. When a
+// day exists under both spellings (the padded build ran after the unpadded
+// one on the same day) the two buckets are merged by summing each domain's
+// ms, since both are genuine engaged time for that day. Returns the new
+// object, or null when no key needed padding.
+function mergePaddedStats(stats) {
+  let changed = false;
+  const out = {};
+  for (const [key, raw] of Object.entries(stats)) {
+    const day = padDayKey(key);
+    if (day !== key) changed = true;
+    const bucket = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+    if (!out[day]) {
+      out[day] = day === key ? bucket : { ...bucket };
+      continue;
+    }
+    const target = { ...out[day] }; // never mutate the bucket read from storage
+    for (const [domain, ms] of Object.entries(bucket)) {
+      const prev = typeof target[domain] === "number" ? target[domain] : 0;
+      target[domain] = prev + (typeof ms === "number" ? ms : 0);
+    }
+    out[day] = target;
+  }
+  return changed ? out : null;
+}
+
+// The stored schemaVersion as an integer: anything missing or malformed is
+// a pre-versioning store, i.e. 0.
+function storedSchemaVersion(stored) {
+  const v = stored.schemaVersion;
+  return Number.isInteger(v) && v >= 0 ? v : 0;
+}
+
+// Pure planner: { status: "current" | "newer" | "upgrade", from, patch }.
+// `patch` is the single set() payload for an upgrade; null otherwise.
+function planMigration(stored) {
+  const from = storedSchemaVersion(stored);
+  if (from === SCHEMA_VERSION) return { status: "current", from, patch: null };
+  if (from > SCHEMA_VERSION) return { status: "newer", from, patch: null };
+  let view = stored;
+  const patch = {};
+  for (let v = from; v < SCHEMA_VERSION; v++) {
+    const step = MIGRATIONS[v] ? MIGRATIONS[v](view) : {};
+    Object.assign(patch, step);
+    view = { ...view, ...step }; // the next step sees the previous step's result
+  }
+  patch.schemaVersion = SCHEMA_VERSION;
+  return { status: "upgrade", from, patch };
+}
+
+// Runs through the handle queue so the rewrite can't interleave with a
+// heartbeat's read-modify-write of usage/stats. Resolves to the plan's
+// status so callers (and tests) can tell what happened.
+function migrateStorage() {
+  return enqueue(async () => {
+    const stored = await get(["schemaVersion", "usage", "stats", "focusSites"]);
+    const plan = planMigration(stored);
+    if (plan.status === "newer") {
+      console.warn(`Focus Cap: storage is schemaVersion ${plan.from}, newer than this build understands (${SCHEMA_VERSION}); leaving it untouched.`);
+    } else if (plan.status === "upgrade") {
+      await set(plan.patch);
+    }
+    return plan.status;
+  });
+}
+
 chrome.runtime.onInstalled.addListener(async (details) => {
   const cur = await get(Object.keys(DEFAULTS));
   const patch = {};
@@ -158,6 +265,8 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     if (cur[k] === undefined) patch[k] = DEFAULTS[k];
   }
   if (Object.keys(patch).length) await set(patch);
+  // Defaults first so a migration step can rely on every key existing.
+  await migrateStorage();
   scheduleMidnightAlarm();
 
   // On first install, open the dashboard (options page) so the user can
@@ -187,7 +296,14 @@ function scheduleMidnightAlarm() {
   chrome.alarms.create(DAILY_RESET_ALARM, { when: nextLocalMidnightMs(), periodInMinutes: 24 * 60 });
 }
 
-chrome.runtime.onStartup.addListener(scheduleMidnightAlarm);
+// A browser restart doesn't fire onInstalled, but the stored data may have
+// been written by an older build (the extension updated while the profile
+// was closed), so the migration runs here too — a no-op write-free check
+// when the version already matches.
+chrome.runtime.onStartup.addListener(() => {
+  scheduleMidnightAlarm();
+  migrateStorage();
+});
 
 // Per-site lock snapshot for the companion app. `locked` is true if ANY site
 // is locked; `sites` carries each site's own state so the companion can say
@@ -263,6 +379,13 @@ const BLOCK_PAGE = "time-is-up.html";
 // registered, connectNative either throws synchronously or the port
 // disconnects immediately — either way we silently do nothing, since the
 // extension must keep working with zero setup beyond "load unpacked".
+// The wire-protocol version this build expects the native host to reply
+// with (native-host/host.js PROTOCOL_VERSION). A mismatch — or a reply
+// from a host too old to send one — is only warned about for now (GitHub
+// issue #12, phase 1); the snapshot is still sent, since the host sanitizes
+// whatever it gets.
+const NATIVE_PROTOCOL_VERSION = 1;
+
 let nativePort = null;
 function getNativePort() {
   if (nativePort) return nativePort;
@@ -272,10 +395,26 @@ function getNativePort() {
     nativePort.onDisconnect.addListener(() => {
       nativePort = null;
     });
+    watchNativeProtocol(nativePort);
   } catch (_) {
     nativePort = null;
   }
   return nativePort;
+}
+
+// Warn once per connection if the host's replies don't speak our protocol
+// version. Every reply is checked (not just the first) but the warning is
+// emitted at most once, so a chatty session doesn't spam the console.
+function watchNativeProtocol(port) {
+  if (!port.onMessage || typeof port.onMessage.addListener !== "function") return;
+  let warned = false;
+  port.onMessage.addListener((reply) => {
+    if (warned || !reply || typeof reply !== "object") return;
+    if (reply.protocolVersion === NATIVE_PROTOCOL_VERSION) return;
+    warned = true;
+    const got = reply.protocolVersion === undefined ? "none (host predates protocol versioning)" : String(reply.protocolVersion);
+    console.warn(`Focus Cap: native host protocolVersion ${got} differs from the expected ${NATIVE_PROTOCOL_VERSION} (host version ${reply.version || "unknown"}); update the native host and the extension together.`);
+  });
 }
 
 function notifyNativeHost(patch) {
@@ -500,6 +639,12 @@ if (typeof module !== "undefined" && module.exports) {
     guardNavigation,
     handle,
     notifyNativeHost,
+    NATIVE_PROTOCOL_VERSION,
+    SCHEMA_VERSION,
+    MIGRATIONS,
+    mergePaddedStats,
+    planMigration,
+    migrateStorage,
     nextLocalMidnightMs,
     scheduleMidnightAlarm,
     snapshotForHost,

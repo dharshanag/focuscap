@@ -39,6 +39,10 @@ file (`~/.focuscap/state.json`, see `../state-store.js`) once a second.
 `locked` (true when *any* tracked site is locked) shows/hides the pill;
 `sites` (`{ [domain]: { locked, reason, until, remainingMs } }`) is what the
 pill lists, most recently blocked first; `lastBlocked` is a legacy fallback.
+The file also carries `schemaVersion` (an integer, currently 1, stamped by
+`state-store.js` on every write) and `updatedAt`; `readState()` fills in
+`schemaVersion` for a file written before it existed, so an older
+`state.json` still renders.
 `native-host/host.js` writes that file from messages the extension sends via
 `chrome.runtime.connectNative()`; the extension also arms an alarm at each
 lock's end so the file is updated when a site unlocks even if nothing is

@@ -107,7 +107,13 @@ node -e '
 ' | node host.js
 ```
 
-The reply on stdout is a length-prefixed `{"ok":true}`. Then check
+The reply on stdout is a length-prefixed
+`{"ok":true,"version":"0.1.0","protocolVersion":1}` — `version` is the
+host's own (the repo's `package.json`), `protocolVersion` the wire protocol
+it speaks; a frame that can't be parsed or written gets
+`{"ok":false,"error":"…"}` with the same two fields. The extension compares
+`protocolVersion` with its own expectation and logs a console warning on a
+mismatch (GitHub issue #12, phase 1 — no UI yet). Then check
 `~/.focuscap/state.json` — it should show `"locked": true`,
 `"lastBlocked": "example.com"` and the `sites` entry. With the companion app
 running, its pill should appear within a second (polling interval) reading

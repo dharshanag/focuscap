@@ -114,7 +114,9 @@ rules say so. Everything is enforced locally and nothing leaves your device.
   pruned automatically); plus two small items in the extension pages' own
   `localStorage` (the theme cache and the block page's daily view counter).
   The log is what the stats page reads; it is never uploaded, synced or sent
-  anywhere.
+  anywhere. A small integer `schemaVersion` marks the layout of that storage
+  (and of `~/.focuscap/state.json`) so an update can upgrade old data in
+  place; it carries no personal information.
 - There is no account, no server, no telemetry. The extension makes no
   network requests of its own. The optional desktop companion reads a local
   file (`~/.focuscap/state.json`) written by the local native host — also
@@ -145,7 +147,10 @@ a minute. Set "After limit" to "block for 1 min" to watch it unlock again.
 - `background.js` — per-site timing accountant + navigation guard (redirects
   to the block page when a site's rules, the global schedule or the cap lock
   it); accrues the per-domain daily stats; pushes lock state to the native
-  host and arms `chrome.alarms` for midnight and each unlock time.
+  host and arms `chrome.alarms` for midnight and each unlock time; on
+  install and browser startup runs the storage schema migration (stamps
+  `schemaVersion`, upgrades older data in place, leaves data from a newer
+  build alone with a console warning).
 - `content.js` — engagement detection, heartbeats from every page, and the
   in-page badge (shown only on tracked, unlocked, enforced sites).
 - `shared.js` — the pure evaluation (`matchSite`, `normalizeSite`,
@@ -209,9 +214,8 @@ click-through / never-takes-focus behaviour is asserted from Electron flags,
 not observed (#13, closed — the heartbeat path and the pill's rendered text
 are now verified); `install-windows.ps1` registers only
 stable Chrome and has never been run (#14); "unblocks at" times can be off by
-an hour across DST or wrong for adjacent windows (#15); storage has no schema
-version yet (#16); sub-minute cool-downs may be reported late in a packed
-build (#17); low-severity hardening from two security reviews (#9, #10, #18).
+an hour across DST or wrong for adjacent windows (#15); sub-minute
+cool-downs may be reported late in a packed build (#17); low-severity hardening from two security reviews (#9, #10, #18).
 Not yet filed: a scheduled blackout or enforcement-window *start* doesn't
 proactively redirect already-open tabs or push a companion snapshot — the
 next heartbeat or navigation handles it; likewise, when a site becomes free

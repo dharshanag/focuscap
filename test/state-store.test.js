@@ -59,6 +59,33 @@ describe("state-store.js", () => {
     expect(second.budgetMs).toBe(1_800_000);
   });
 
+  // Issue #16: state.json carries an explicit schema version.
+  it("writeState() stamps every write with STATE_SCHEMA_VERSION, even if the patch tries to override it", async () => {
+    const store = await import("../state-store.js");
+    expect(store.STATE_SCHEMA_VERSION).toBe(1);
+    expect(store.DEFAULT_STATE.schemaVersion).toBe(store.STATE_SCHEMA_VERSION);
+    const written = store.writeState({ locked: true, schemaVersion: 42 });
+    expect(written.schemaVersion).toBe(store.STATE_SCHEMA_VERSION);
+    const onDisk = JSON.parse(fs.readFileSync(store.STATE_FILE, "utf8"));
+    expect(onDisk.schemaVersion).toBe(store.STATE_SCHEMA_VERSION);
+    expect(store.readState().schemaVersion).toBe(store.STATE_SCHEMA_VERSION);
+  });
+
+  it("readState() tolerates a state file written before schemaVersion existed (fills it in, keeps the data)", async () => {
+    const store = await import("../state-store.js");
+    fs.mkdirSync(store.STATE_DIR, { recursive: true });
+    const legacy = { locked: true, remainingMs: 0, budgetMs: 60_000, focusSites: [], sites: { "example.com": { locked: true, reason: "lockout", until: 5, remainingMs: 0 } }, lastBlocked: "example.com", updatedAt: 1 };
+    fs.writeFileSync(store.STATE_FILE, JSON.stringify(legacy));
+    const read = store.readState();
+    expect(read.schemaVersion).toBe(store.STATE_SCHEMA_VERSION);
+    expect(read.locked).toBe(true);
+    expect(read.sites).toEqual(legacy.sites);
+    expect(read.lastBlocked).toBe("example.com");
+    // The next write upgrades the file in place.
+    store.writeState({ locked: false });
+    expect(JSON.parse(fs.readFileSync(store.STATE_FILE, "utf8")).schemaVersion).toBe(store.STATE_SCHEMA_VERSION);
+  });
+
   it("writeState() bumps updatedAt on every call", async () => {
     const store = await import("../state-store.js");
     const first = store.writeState({ locked: true });

@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Only the pure parsing/sanitizing functions are unit-tested here.
 // native-host/host.js's actual write to the shared state file happens via a
@@ -68,6 +71,29 @@ describe("native-host/host.js", () => {
       const { frames, rest } = host.extractFrames(buf);
       expect(frames).toHaveLength(0);
       expect(rest.equals(buf)).toBe(true);
+    });
+  });
+
+  // Issue #16 / #12 phase 1: every reply names the host and protocol version.
+  describe("buildReply()", () => {
+    it("a successful frame is answered with { ok: true, version, protocolVersion }", async () => {
+      const host = await import("../native-host/host.js");
+      expect(host.PROTOCOL_VERSION).toBe(1);
+      expect(host.HOST_VERSION).toBe(JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8")).version);
+      expect(host.buildReply(null)).toEqual({ ok: true, version: host.HOST_VERSION, protocolVersion: host.PROTOCOL_VERSION });
+      // The reply is what goes on the wire, so it must survive encodeFrame().
+      const { frames } = host.extractFrames(host.encodeFrame(host.buildReply(null)));
+      expect(JSON.parse(frames[0].toString("utf8"))).toEqual({ ok: true, version: host.HOST_VERSION, protocolVersion: 1 });
+    });
+
+    it("a failed frame keeps the { ok: false, error } shape (plus the versions)", async () => {
+      const host = await import("../native-host/host.js");
+      expect(host.buildReply(new Error("Unexpected token"))).toEqual({
+        ok: false,
+        error: "Unexpected token",
+        version: host.HOST_VERSION,
+        protocolVersion: host.PROTOCOL_VERSION
+      });
     });
   });
 

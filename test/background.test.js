@@ -284,6 +284,67 @@ describe("background.js", () => {
     });
   });
 
+  // --- Issue #12 phase 1 / #16: the host's replies carry a protocolVersion ---
+  describe("native host protocol handshake", () => {
+    function portWithReplies(chrome) {
+      const replies = [];
+      const port = {
+        postMessage: () => {},
+        onDisconnect: { addListener: () => {} },
+        onMessage: { addListener: (fn) => replies.push(fn) }
+      };
+      chrome.runtime.connectNative = () => port;
+      return { port, reply: (msg) => replies.forEach((fn) => fn(msg)) };
+    }
+
+    it("warns exactly once per connection when the host replies with a different protocolVersion", async () => {
+      const { bg, chrome } = await loadBackground({});
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { reply } = portWithReplies(chrome);
+      bg.notifyNativeHost({ locked: false });
+      expect(bg.NATIVE_PROTOCOL_VERSION).toBe(1);
+      reply({ ok: true, version: "9.9.9", protocolVersion: 2 });
+      reply({ ok: true, version: "9.9.9", protocolVersion: 2 });
+      reply({ ok: false, error: "x", version: "9.9.9", protocolVersion: 2 });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toMatch(/protocolVersion 2/);
+      expect(warn.mock.calls[0][0]).toMatch(/expected 1/);
+      warn.mockRestore();
+    });
+
+    it("warns about a host too old to send a protocolVersion, and stays silent when it matches", async () => {
+      const old = await loadBackground({});
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      old.bg.notifyNativeHost({ locked: false });
+      portWithReplies(old.chrome).reply({ ok: true });
+      // The port above was created before connectNative was swapped, so
+      // connect again on a fresh module to get the reply-capturing port.
+      const fresh = await loadBackground({});
+      const legacy = portWithReplies(fresh.chrome);
+      fresh.bg.notifyNativeHost({ locked: false });
+      legacy.reply({ ok: true });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toMatch(/predates protocol versioning/);
+
+      warn.mockClear();
+      const ok = await loadBackground({});
+      const matching = portWithReplies(ok.chrome);
+      ok.bg.notifyNativeHost({ locked: false });
+      matching.reply({ ok: true, version: "0.1.0", protocolVersion: 1 });
+      matching.reply("not an object");
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it("tolerates a port without onMessage (older mocks / stubs) and still posts", async () => {
+      const { bg, chrome } = await loadBackground({});
+      const posted = [];
+      chrome.runtime.connectNative = () => ({ postMessage: (m) => posted.push(m), onDisconnect: { addListener: () => {} } });
+      bg.notifyNativeHost({ locked: true });
+      expect(posted).toEqual([{ locked: true }]);
+    });
+  });
+
   // --- Per-site rules: budgets, cool-down lockouts, schedules, global cap ---
   describe("per-site rules", () => {
     afterEach(() => {
