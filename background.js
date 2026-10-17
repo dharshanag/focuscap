@@ -340,19 +340,26 @@ async function guardNavigation(details) {
   } catch (_) {
     return;
   }
-  const status = await isLocked(hostname);
-  if (!status.locked) return;
-  // A budget lock discovered here (e.g. the site's budget was lowered below
-  // what's already been used) has to start its cool-down clock too — the
-  // redirect fires before content.js ever gets to send "entering", so no
-  // heartbeat path would otherwise persist lockedUntil.
-  if (status.reason === "budget" && status.site) {
-    const rec = siteUsage(status.usage, status.site.domain);
-    if (rec.lockedUntil !== status.until) {
-      rec.lockedUntil = status.until;
-      await set({ usage: status.usage });
+  // The read-modify-write below goes through the same queue as heartbeats:
+  // a navigation-time budget lock must never land on top of (and erase) a
+  // usage increment a concurrent heartbeat is in the middle of writing.
+  const status = await enqueue(async () => {
+    const s = await isLocked(hostname);
+    if (!s.locked) return s;
+    // A budget lock discovered here (e.g. the site's budget was lowered below
+    // what's already been used) has to start its cool-down clock too — the
+    // redirect fires before content.js ever gets to send "entering", so no
+    // heartbeat path would otherwise persist lockedUntil.
+    if (s.reason === "budget" && s.site) {
+      const rec = siteUsage(s.usage, s.site.domain);
+      if (rec.lockedUntil !== s.until) {
+        rec.lockedUntil = s.until;
+        await set({ usage: s.usage });
+      }
     }
-  }
+    return s;
+  });
+  if (!status.locked) return;
   armUnlock(status.site, status);
   // No heartbeat will follow a navigation-time block, so push the per-site
   // snapshot here too.

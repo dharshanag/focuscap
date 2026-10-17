@@ -119,6 +119,76 @@ describe("background.js", () => {
     expect(usage.totalMs).toBe(3000);
   });
 
+  // Same race, other entry point: a navigation-time budget lock discovered by
+  // guardNavigation() also does a read-modify-write of `usage` (to persist the
+  // cool-down). It must queue behind an in-flight heartbeat, not read a stale
+  // snapshot and then stomp the heartbeat's increment. Found while writing the
+  // test cases for issue #4.
+  it("guardNavigation() queues its usage write behind an in-flight heartbeat instead of clobbering it", async () => {
+    const baseNow = 1_000_000;
+    const todayKey = localTodayKey(baseNow);
+    const storage = createControllableStorage({
+      // 60s budget, 59s already used, 10-minute cool-down: the heartbeat below
+      // takes it over the line.
+      focusSites: [{ domain: "youtube.com", budgetSeconds: 60, lockoutSeconds: 600 }],
+      budgetSeconds: 3600,
+      usage: { date: todayKey, totalMs: 59_000, sites: { "youtube.com": { totalMs: 59_000, lastTickAt: baseNow } } }
+    });
+    stubSharedGlobals(await import("../shared.js"));
+    const tabUpdates = [];
+    vi.stubGlobal("chrome", {
+      storage: { local: { get: storage.get, set: storage.set }, onChanged: { addListener: () => {} } },
+      runtime: {
+        onInstalled: { addListener: () => {} },
+        onStartup: { addListener: () => {} },
+        onMessage: { addListener: () => {} },
+        sendMessage: () => Promise.resolve({}),
+        getURL: (p) => p
+      },
+      tabs: { update: (id, opts) => { tabUpdates.push([id, opts]); return Promise.resolve(); } },
+      webNavigation: { onBeforeNavigate: { addListener: () => {} }, onHistoryStateUpdated: { addListener: () => {} } },
+      alarms: { create: () => {}, onAlarm: { addListener: () => {} } }
+    });
+    vi.resetModules();
+    vi.useFakeTimers();
+    vi.setSystemTime(baseNow);
+    const bg = await import("../background.js");
+
+    // A heartbeat is mid-flight (its get() issued, nothing resolved yet)...
+    const heartbeat = bg.handle({ type: "heartbeat", hostname: "youtube.com" });
+    await microtasks();
+    expect(storage.pendingGetCount()).toBe(1);
+    // ...when a navigation to the same site arrives in another tab.
+    const nav = bg.guardNavigation({ frameId: 0, tabId: 9, url: "https://youtube.com/" });
+    await microtasks();
+    // Serialized: the navigation guard has NOT issued its own read yet.
+    expect(storage.pendingGetCount()).toBe(1);
+
+    // Heartbeat completes 2s later: 59s + 2s = over budget -> cool-down starts.
+    vi.setSystemTime(baseNow + 2000);
+    storage.releaseNextGet();
+    await microtasks();
+    expect(storage.pendingSetCount()).toBe(1);
+    storage.releaseNextSet();
+    await microtasks();
+    await heartbeat;
+    expect(storage.getStore().usage.sites["youtube.com"].totalMs).toBe(61_000);
+
+    // Only now does the guard read — and it sees the fresh record.
+    expect(storage.pendingGetCount()).toBe(1);
+    storage.releaseNextGet();
+    await microtasks();
+    // lockedUntil already matches what the heartbeat persisted, so the guard
+    // has nothing to write to `usage`; it must not re-write a stale copy.
+    while (storage.pendingSetCount()) { storage.releaseNextSet(); await microtasks(); }
+    await nav;
+
+    const { usage } = storage.getStore();
+    expect(usage.sites["youtube.com"].totalMs).toBe(61_000); // heartbeat's increment survived
+    expect(usage.sites["youtube.com"].lockedUntil).toBe(baseNow + 2000 + 600_000);
+    expect(tabUpdates).toEqual([[9, { url: "time-is-up.html" }]]);
+  });
+
   // --- Issue #3: redirectToBlock() isn't awaited in the onMessage handler ---
   // https://github.com/dharshanag/focuscap/issues/3
   it("a rejected redirectToBlock() should not escape as an unhandled rejection", async () => {
