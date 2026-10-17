@@ -123,6 +123,16 @@ describe("stats page wiring", () => {
     }
   });
 
+  // Issue #18: the add-site normalizer was duplicated in dashboard.js and
+  // options.js; it now lives in shared.js only (so the reserved-name check
+  // can't drift between the two forms).
+  it("dashboard.js and options.js define no local normalizeDomain (it comes from shared.js)", () => {
+    for (const f of ["dashboard.js", "options.js"]) {
+      expect(read(f), `normalizeDomain duplicated in ${f}`).not.toMatch(/(function\s+normalizeDomain\b|\b(const|let|var)\s+normalizeDomain\s*=)/);
+    }
+    expect(read("shared.js")).toMatch(/function\s+normalizeDomain\b/);
+  });
+
   it("dashboard.html has the Daily stats button dashboard.js wires up", () => {
     const btn = parsePage("dashboard.html").getElementById("statsBtn");
     expect(btn).not.toBeNull();

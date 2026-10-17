@@ -315,7 +315,9 @@ chrome.runtime.onStartup.addListener(() => {
 // which ones, and until when. A global blackout shows up here as every site
 // locked with reason "schedule".
 function snapshotForHost(focusSites, usage, globalBudgetMs, now, schedule) {
-  const sites = {};
+  // Keyed by domain, so null-prototype like usage.sites: a legacy stored
+  // domain named "__proto__" must be an own entry, never a prototype swap.
+  const sites = Object.create(null);
   let anyLocked = false;
   let minRemaining = globalBudgetMs;
   for (const site of focusSites) {

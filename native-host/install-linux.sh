@@ -39,13 +39,23 @@ if [[ -n "$USER_DATA_DIR" ]]; then
   TARGET_DIRS+=("$USER_DATA_DIR/NativeMessagingHosts")
 fi
 
+# The manifest is built by node from the template object and written with
+# JSON.stringify, not by sed-substituting placeholders: a checkout path or
+# extension ID containing sed's `#`/`&`/`\` metacharacters used to produce a
+# malformed manifest (issue #18). node is already a hard requirement of the
+# host itself, so this adds no dependency.
+MANIFEST="$(node -e '
+  const fs = require("fs");
+  const [template, hostPath, extensionId] = process.argv.slice(1);
+  const manifest = JSON.parse(fs.readFileSync(template, "utf8"));
+  manifest.path = hostPath;
+  manifest.allowed_origins = ["chrome-extension://" + extensionId + "/"];
+  process.stdout.write(JSON.stringify(manifest, null, 2));
+' "$SCRIPT_DIR/com.focuscap.host.json.template" "$SCRIPT_DIR/host.js" "$EXTENSION_ID")"
+
 for TARGET_DIR in "${TARGET_DIRS[@]}"; do
   mkdir -p "$TARGET_DIR"
-  sed \
-    -e "s#__HOST_PATH__#$SCRIPT_DIR/host.js#" \
-    -e "s#__EXTENSION_ID__#$EXTENSION_ID#" \
-    "$SCRIPT_DIR/com.focuscap.host.json.template" \
-    > "$TARGET_DIR/com.focuscap.host.json"
+  printf '%s\n' "$MANIFEST" > "$TARGET_DIR/com.focuscap.host.json"
   echo "Registered: $TARGET_DIR/com.focuscap.host.json"
 done
 

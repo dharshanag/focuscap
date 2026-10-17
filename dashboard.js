@@ -28,12 +28,8 @@ const el = (id) => document.getElementById(id);
 const get = (keys) => chrome.storage.local.get(keys);
 const set = (obj) => chrome.storage.local.set(obj);
 
-function normalizeDomain(raw) {
-  let d = (raw || "").trim().toLowerCase();
-  d = d.replace(/^https?:\/\//, "").replace(/^www\./, "");
-  d = d.split("/")[0].split(":")[0];
-  return d;
-}
+// normalizeDomain (what the add-site field accepts) comes from shared.js, so
+// the popup and the options page can never disagree on what a domain is.
 
 // Today's usage in ms — treats a stale (yesterday's) record as 0.
 function usedMsToday(usage) {

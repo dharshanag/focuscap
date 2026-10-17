@@ -215,7 +215,7 @@ not observed (#13, closed — the heartbeat path and the pill's rendered text
 are now verified); `install-windows.ps1` registers only
 stable Chrome and has never been run (#14); "unblocks at" times can be off by
 an hour across DST or wrong for adjacent windows (#15); sub-minute
-cool-downs may be reported late in a packed build (#17); low-severity hardening from two security reviews (#9, #10, #18).
+cool-downs may be reported late in a packed build (#17).
 Not yet filed: a scheduled blackout or enforcement-window *start* doesn't
 proactively redirect already-open tabs or push a companion snapshot — the
 next heartbeat or navigation handles it; likewise, when a site becomes free
@@ -230,6 +230,19 @@ be typed (`0.05`) and is stored exactly, but the field flags it as out of
 step and displays it to one decimal (`0.1`). The native host's
 `~/.focuscap/state.json` is one file per OS user, so run the extension in
 one browser profile at a time (see `native-host/README.md`).
+
+**Dev-dependency audit.** Neither the repo root nor `companion/` ships a
+runtime npm dependency, so `npm audit --omit=dev` is clean in both. The
+root's test tooling (`vitest`, `jsdom`) is on versions with no open
+advisories. `companion/` still reports six that only `electron@44` (a major
+upgrade, not yet verified by launching the companion) would clear, all in
+Electron 32 itself or its download/install tooling: `electron` 32.3.3
+(high; the direct dependency — 37 advisories, all fixed only by the
+`electron@44` major; `cd companion && npm audit` lists them), `extract-zip`
+(high; GHSA-jmr9-qjv8-65gv,
+GHSA-7pqw-9j4j-h8q3), `sprintf-js` (moderate; GHSA-hp3w-g68c-fv3c) and its
+dependents `roarr`, `global-agent`, `@electron/get` (moderate, same
+advisory). None of them is reachable from the extension or the native host.
 
 ## Ideas for next
 

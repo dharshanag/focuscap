@@ -60,6 +60,25 @@ describe("dashboard.js (popup)", () => {
     expect(dash.normalizeDomain("reddit.com:443/r/all")).toBe("reddit.com");
   });
 
+  // Issue #18: reserved names can't become tracked domains.
+  it("normalizeDomain() rejects __proto__ / constructor / prototype (even behind a protocol) and the add form stores nothing for them", async () => {
+    const { dash, chrome, getStore } = await loadDashboard({ focusSites: [] });
+    for (const raw of ["__proto__", "constructor", "prototype", "https://__proto__/x"]) {
+      expect(dash.normalizeDomain(raw), raw).toBe("");
+      el("domainInput").value = raw;
+      await dash.addSite(new Event("submit"));
+      await flush();
+    }
+    expect(chrome.storage.local.set).not.toHaveBeenCalledWith(expect.objectContaining({ focusSites: expect.anything() }));
+    expect(getStore().focusSites).toEqual([]);
+    // A real domain that merely contains the word is still accepted.
+    expect(dash.normalizeDomain("proto.example.com")).toBe("proto.example.com");
+    el("domainInput").value = "proto.example.com";
+    await dash.addSite(new Event("submit"));
+    await flush();
+    expect(getStore().focusSites.map((s) => s.domain)).toEqual(["proto.example.com"]);
+  });
+
   // --- Buttons ---
   it("the Daily stats button opens stats.html in a new tab (and a rejected tabs.create is swallowed)", async () => {
     const { chrome } = await loadDashboard({});

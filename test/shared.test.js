@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { dayKey, describeStatus, fmtClock, fmtUntil, padDayKey, parseIntOr, RULE_GRACE_MS, ruleInGrace, SCHEMA_VERSION, todayKey } from "../shared.js";
+import { dayKey, describeStatus, evaluateSite, fmtClock, fmtUntil, normalizeDomain, normalizeUsage, padDayKey, parseIntOr, RULE_GRACE_MS, ruleInGrace, SCHEMA_VERSION, siteUsage, todayKey } from "../shared.js";
 
 describe("shared.js", () => {
   describe("fmtClock()", () => {
@@ -155,5 +155,74 @@ describe("schema versioning helpers (issue #16)", () => {
     expect(padDayKey("junk")).toBe("junk");
     expect(padDayKey("2026-9-5T00")).toBe("2026-9-5T00");
     expect(padDayKey(42)).toBe(42);
+  });
+});
+
+// Issue #18: reserved property names as domains / crafted usage records.
+describe("reserved names and prototype safety (issue #18)", () => {
+  describe("normalizeDomain()", () => {
+    it("strips protocol, www, path and port and lowercases", () => {
+      expect(normalizeDomain("https://www.YouTube.com/watch?v=1")).toBe("youtube.com");
+      expect(normalizeDomain("reddit.com:443/r/all")).toBe("reddit.com");
+      expect(normalizeDomain("  Example.COM  ")).toBe("example.com");
+      expect(normalizeDomain("")).toBe("");
+      expect(normalizeDomain(undefined)).toBe("");
+      expect(normalizeDomain(null)).toBe("");
+    });
+
+    it("rejects the Object.prototype names __proto__ / constructor / prototype, after the strip", () => {
+      for (const raw of ["__proto__", "constructor", "prototype", "https://__proto__/x", "WWW.CONSTRUCTOR:443", " prototype "]) {
+        expect(normalizeDomain(raw), raw).toBe("");
+      }
+    });
+
+    it("still accepts a real label that merely contains the word", () => {
+      expect(normalizeDomain("proto.example.com")).toBe("proto.example.com");
+      expect(normalizeDomain("constructor.example.com")).toBe("constructor.example.com");
+      expect(normalizeDomain("__proto__.example.com")).toBe("__proto__.example.com");
+    });
+  });
+
+  describe("normalizeUsage() / siteUsage() use own-property, null-prototype maps", () => {
+    it("a crafted {\"__proto__\": {...}} key in stored usage neither pollutes Object.prototype nor resolves to it", () => {
+      const now = Date.now();
+      const u = normalizeUsage({ date: todayKey(), totalMs: 0, sites: JSON.parse('{"__proto__":{"totalMs":1}}') }, now);
+      const rec = siteUsage(u, "example.com");
+      expect(rec).toEqual({ totalMs: 0 });
+      expect(Object.prototype.totalMs).toBeUndefined();
+      expect(({}).totalMs).toBeUndefined();
+      expect(Object.getPrototypeOf(u.sites)).toBeNull();
+      expect(Object.hasOwn(u.sites, "__proto__")).toBe(true);
+      const proto = siteUsage(u, "__proto__");
+      expect(proto).not.toBe(Object.prototype);
+      expect(proto).toEqual({ totalMs: 1, lastTickAt: undefined, lockedUntil: undefined });
+      // A normal site's evaluation is unaffected.
+      const status = evaluateSite({ domain: "example.com", budgetSeconds: 60, lockoutSeconds: null, rules: [] }, u, 1_800_000, now);
+      expect(status.locked).toBe(false);
+      expect(status.remainingMs).toBe(60_000);
+    });
+
+    it("siteUsage() on a plain-object map never hands out Object.prototype for \"__proto__\"", () => {
+      const u = { date: todayKey(), totalMs: 0, sites: {} };
+      const rec = siteUsage(u, "__proto__");
+      expect(rec).not.toBe(Object.prototype);
+      expect(rec).toEqual({ totalMs: 0 });
+      expect(Object.hasOwn(u.sites, "__proto__")).toBe(true);
+      expect(Object.getPrototypeOf(u.sites)).toBe(Object.prototype); // the map's prototype was not swapped
+      expect(Object.prototype.totalMs).toBeUndefined();
+      // Mutations land on the own entry, as for any other domain.
+      rec.totalMs += 5;
+      expect(siteUsage(u, "__proto__").totalMs).toBe(5);
+      expect(siteUsage(u, "constructor")).toEqual({ totalMs: 0 });
+    });
+
+    it("the normalized map still JSON-round-trips like a plain object (what chrome.storage / the mock do)", () => {
+      const u = normalizeUsage({ date: todayKey(), totalMs: 7, sites: { "a.com": { totalMs: 3 } } }, Date.now());
+      siteUsage(u, "b.com").totalMs = 4;
+      const back = JSON.parse(JSON.stringify(u));
+      expect(back).toEqual({ date: todayKey(), totalMs: 7, sites: { "a.com": { totalMs: 3 }, "b.com": { totalMs: 4 } } });
+      // And a round-tripped record normalizes again without losing entries.
+      expect(Object.keys(normalizeUsage(back, Date.now()).sites).sort()).toEqual(["a.com", "b.com"]);
+    });
   });
 });

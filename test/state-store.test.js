@@ -86,6 +86,50 @@ describe("state-store.js", () => {
     expect(JSON.parse(fs.readFileSync(store.STATE_FILE, "utf8")).schemaVersion).toBe(store.STATE_SCHEMA_VERSION);
   });
 
+  // Issue #10: the state file names the site the user was just blocked on;
+  // keep it out of other local accounts' reach. Mode bits are meaningless on
+  // Windows, where the calls are a documented no-op.
+  it.skipIf(process.platform === "win32")("writeState() creates ~/.focuscap as 0700 and state.json as 0600, whatever the umask", async () => {
+    const store = await import("../state-store.js");
+    const prev = process.umask(0o022); // a permissive umask must not widen them
+    try {
+      store.writeState({});
+    } finally {
+      process.umask(prev);
+    }
+    expect(fs.statSync(store.STATE_DIR).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(store.STATE_FILE).mode & 0o777).toBe(0o600);
+  });
+
+  it.skipIf(process.platform === "win32")("writeState() tightens a pre-existing world-readable directory and file (mode is ignored for existing paths)", async () => {
+    const store = await import("../state-store.js");
+    fs.mkdirSync(store.STATE_DIR, { recursive: true, mode: 0o755 });
+    fs.chmodSync(store.STATE_DIR, 0o755);
+    fs.writeFileSync(store.STATE_FILE, JSON.stringify({ locked: false }), { mode: 0o644 });
+    fs.chmodSync(store.STATE_FILE, 0o644);
+    expect(fs.statSync(store.STATE_DIR).mode & 0o777).toBe(0o755);
+    expect(fs.statSync(store.STATE_FILE).mode & 0o777).toBe(0o644);
+
+    store.writeState({ locked: true });
+    expect(fs.statSync(store.STATE_DIR).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(store.STATE_FILE).mode & 0o777).toBe(0o600);
+    expect(store.readState().locked).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")("writeState() still succeeds when chmod fails (the tightening is best-effort)", async () => {
+    const chmod = vi.spyOn(fs, "chmodSync").mockImplementation(() => {
+      throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" });
+    });
+    try {
+      const store = await import("../state-store.js");
+      expect(() => store.writeState({ locked: true })).not.toThrow();
+      expect(chmod).toHaveBeenCalled();
+      expect(store.readState().locked).toBe(true);
+    } finally {
+      chmod.mockRestore();
+    }
+  });
+
   it("writeState() bumps updatedAt on every call", async () => {
     const store = await import("../state-store.js");
     const first = store.writeState({ locked: true });

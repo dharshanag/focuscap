@@ -46,7 +46,11 @@ The file also carries `schemaVersion` (an integer, currently 1, stamped by
 `native-host/host.js` writes that file from messages the extension sends via
 `chrome.runtime.connectNative()`; the extension also arms an alarm at each
 lock's end so the file is updated when a site unlocks even if nothing is
-being browsed.
+being browsed. `writeState()` creates `~/.focuscap` as `0700` and
+`state.json` as `0600` (and re-tightens a pre-existing dir/file on every
+write), so another local account can't read which site you were just blocked
+on; this app runs as the same user, so it reads the file normally. On
+Windows the mode bits are a no-op.
 
 ## Status
 

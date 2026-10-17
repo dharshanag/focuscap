@@ -86,14 +86,108 @@ describe("native-host/host.js", () => {
       expect(JSON.parse(frames[0].toString("utf8"))).toEqual({ ok: true, version: host.HOST_VERSION, protocolVersion: 1 });
     });
 
-    it("a failed frame keeps the { ok: false, error } shape (plus the versions)", async () => {
+    // Issue #9: the error string on the wire is fixed. An fs error's message
+    // carries the absolute state-file path (and so the OS username); a
+    // JSON.parse error echoes the input. Neither may leave the machine.
+    it("a failed frame keeps the { ok: false, error } shape (plus the versions) with a fixed generic error, never err.message", async () => {
       const host = await import("../native-host/host.js");
-      expect(host.buildReply(new Error("Unexpected token"))).toEqual({
+      expect(host.GENERIC_ERROR).toBe("internal error");
+      const reply = host.buildReply(new Error("ENOENT: open '/home/alice/.focuscap/state.json'"));
+      expect(reply).toEqual({
         ok: false,
-        error: "Unexpected token",
+        error: "internal error",
         version: host.HOST_VERSION,
         protocolVersion: host.PROTOCOL_VERSION
       });
+      expect(reply.error).not.toMatch(/alice|\.focuscap|\//);
+      // Non-Error throwables (a thrown string, even an empty one) are
+      // failures too — not "undefined", not the string itself, not ok: true.
+      expect(host.buildReply("string-throw").error).toBe("internal error");
+      expect(host.buildReply("").ok).toBe(false);
+      expect(host.buildReply(0).ok).toBe(false);
+      expect(host.buildReply(null).ok).toBe(true);
+      expect(host.buildReply(undefined).ok).toBe(true);
+    });
+  });
+
+  // Issue #9: the per-frame handler, driven without stdin. `writeState` is
+  // injected so the real state file is never touched (and so the CJS
+  // require-cache mismatch described at the top of this file never bites).
+  describe("handleFrame()", () => {
+    const decode = (host, reply) => JSON.parse(host.extractFrames(host.encodeFrame(reply)).frames[0].toString("utf8"));
+
+    it("answers a valid frame with ok: true and hands writeState the sanitized patch", async () => {
+      const host = await import("../native-host/host.js");
+      const writeState = vi.fn();
+      const log = vi.fn();
+      const frame = host.extractFrames(host.encodeFrame({ locked: true, lastBlocked: "example.com", junk: 1 })).frames[0];
+      const reply = host.handleFrame(frame, { writeState, log });
+      expect(reply).toEqual({ ok: true, version: host.HOST_VERSION, protocolVersion: host.PROTOCOL_VERSION });
+      expect(writeState).toHaveBeenCalledWith({ locked: true, lastBlocked: "example.com" });
+      expect(log).not.toHaveBeenCalled();
+    });
+
+    it("a writeState() fs error decodes to the generic error on the wire; the path only reaches the (stderr) log", async () => {
+      const host = await import("../native-host/host.js");
+      const writeState = vi.fn(() => {
+        throw new Error("ENOENT: open '/home/alice/.focuscap/state.json'");
+      });
+      const log = vi.fn();
+      const frame = host.extractFrames(host.encodeFrame({ locked: true })).frames[0];
+      const reply = decode(host, host.handleFrame(frame, { writeState, log }));
+      expect(reply).toEqual({ ok: false, error: "internal error", version: host.HOST_VERSION, protocolVersion: host.PROTOCOL_VERSION });
+      expect(reply.error).not.toMatch(/alice|\.focuscap|\//);
+      expect(JSON.stringify(reply)).not.toMatch(/alice|\.focuscap|ENOENT|state\.json/);
+      // The detail is still available locally for debugging.
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls[0][0]).toMatch(/ENOENT: open '\/home\/alice\/\.focuscap\/state\.json'/);
+    });
+
+    it("a thrown string (non-Error throwable) is still the generic error, not 'undefined' or the string", async () => {
+      const host = await import("../native-host/host.js");
+      const writeState = vi.fn(() => {
+        throw "string-throw"; // eslint-disable-line no-throw-literal
+      });
+      const log = vi.fn();
+      const frame = host.extractFrames(host.encodeFrame({ locked: true })).frames[0];
+      const reply = decode(host, host.handleFrame(frame, { writeState, log }));
+      expect(reply.ok).toBe(false);
+      expect(reply.error).toBe("internal error");
+      expect(log.mock.calls[0][0]).toContain("string-throw");
+    });
+
+    it("a malformed JSON frame gets the generic error (no SyntaxError echo) and the next valid frame on the same loop gets ok: true", async () => {
+      const host = await import("../native-host/host.js");
+      const writeState = vi.fn();
+      const log = vi.fn();
+      const body = Buffer.from("{not json", "utf8");
+      const header = Buffer.alloc(4);
+      header.writeUInt32LE(body.length, 0);
+      const stream = Buffer.concat([header, body, host.encodeFrame({ locked: false })]);
+      const { frames } = host.extractFrames(stream);
+      expect(frames).toHaveLength(2);
+      const replies = frames.map((f) => decode(host, host.handleFrame(f, { writeState, log })));
+      expect(replies[0]).toEqual({ ok: false, error: "internal error", version: host.HOST_VERSION, protocolVersion: host.PROTOCOL_VERSION });
+      expect(JSON.stringify(replies[0])).not.toMatch(/SyntaxError|Unexpected token|not json/);
+      expect(replies[1]).toEqual({ ok: true, version: host.HOST_VERSION, protocolVersion: host.PROTOCOL_VERSION });
+      expect(writeState).toHaveBeenCalledTimes(1);
+      expect(writeState).toHaveBeenCalledWith({ locked: false });
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls[0][0]).toMatch(/SyntaxError|JSON/);
+    });
+
+    it("logs through console.error (stderr) when no logger is injected", async () => {
+      const host = await import("../native-host/host.js");
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const reply = host.handleFrame(Buffer.from("{not json", "utf8"), { writeState: vi.fn() });
+        expect(reply.ok).toBe(false);
+        expect(reply.error).toBe("internal error");
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(spy.mock.calls[0][0]).toMatch(/frame failed/);
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 
@@ -111,9 +205,52 @@ describe("native-host/host.js", () => {
         locked: true,
         remainingMs: 5000,
         budgetMs: 1_800_000,
-        focusSites: [{ domain: "example.com" }],
+        // A bare { domain } entry is filled with the SITE_DEFAULTS values
+        // shared.js's normalizeSite() would use.
+        focusSites: [{ domain: "example.com", budgetSeconds: 1800, lockoutSeconds: null, rules: [] }],
         lastBlocked: "example.com"
       });
+    });
+
+    // Issue #18: focusSites used to pass through on Array.isArray() alone.
+    it("sanitizeStatePatch() keeps only {domain, budgetSeconds, lockoutSeconds, rules} per focusSites entry", async () => {
+      const host = await import("../native-host/host.js");
+      // The exact frame from the issue's TC4 table.
+      const patch = host.sanitizeStatePatch({
+        focusSites: [
+          { domain: "a.com", budgetSeconds: "x", evil: 1, rules: "nope" },
+          "junk",
+          null,
+          { domain: 5 },
+          { domain: "b.com", budgetSeconds: 60, lockoutSeconds: null, rules: [] }
+        ]
+      });
+      expect(patch).toEqual({
+        focusSites: [
+          { domain: "a.com", budgetSeconds: 1800, lockoutSeconds: null, rules: [] },
+          { domain: "b.com", budgetSeconds: 60, lockoutSeconds: null, rules: [] }
+        ]
+      });
+      expect(JSON.stringify(patch)).not.toContain("evil");
+      for (const site of patch.focusSites) {
+        expect(Object.keys(site).sort()).toEqual(["budgetSeconds", "domain", "lockoutSeconds", "rules"]);
+        expect(Array.isArray(site.rules)).toBe(true);
+      }
+    });
+
+    it("sanitizeFocusSites() applies normalizeSite()'s semantics: negative budget and non-positive cool-down fall back, rules keep only plain objects", async () => {
+      const host = await import("../native-host/host.js");
+      expect(host.sanitizeFocusSites([
+        { domain: "a.com", budgetSeconds: -5, lockoutSeconds: 0, rules: [{ type: "block" }, "x", null, [1]] },
+        { domain: "b.com", budgetSeconds: 0, lockoutSeconds: 900 },
+        { domain: "" },
+        [],
+        42
+      ])).toEqual([
+        { domain: "a.com", budgetSeconds: 1800, lockoutSeconds: null, rules: [{ type: "block" }] },
+        { domain: "b.com", budgetSeconds: 0, lockoutSeconds: 900, rules: [] }
+      ]);
+      expect(host.sanitizeStatePatch({ focusSites: [] })).toEqual({ focusSites: [] });
     });
 
     it("drops wrong-typed fields instead of forwarding them to the shared state file", async () => {
@@ -155,6 +292,20 @@ describe("native-host/host.js", () => {
           "reddit.com": { locked: false, reason: null, until: null, remainingMs: 5_000 }
         }
       });
+    });
+
+    // Issue #18: the snapshot map is keyed by extension-supplied domains, so
+    // a key named "__proto__" has to be an own entry, not a prototype swap.
+    it("sanitizeSites() returns a null-prototype map, so a \"__proto__\" key is an own entry and Object.prototype is untouched", async () => {
+      const host = await import("../native-host/host.js");
+      const out = host.sanitizeSites(JSON.parse('{"__proto__":{"locked":true},"example.com":{"locked":false}}'));
+      expect(Object.getPrototypeOf(out)).toBeNull();
+      expect(Object.hasOwn(out, "__proto__")).toBe(true);
+      expect(out["__proto__"]).toEqual({ locked: true, reason: null, until: null, remainingMs: 0 });
+      expect(({}).locked).toBeUndefined();
+      expect(Object.prototype.locked).toBeUndefined();
+      // Still round-trips as plain JSON for the state file.
+      expect(JSON.parse(JSON.stringify(out))["example.com"]).toEqual({ locked: false, reason: null, until: null, remainingMs: 0 });
     });
 
     it("ignores a `sites` value that isn't a plain object", async () => {

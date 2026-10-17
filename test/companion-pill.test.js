@@ -29,6 +29,19 @@ describe("companion/pill.js", () => {
     expect(lines).toEqual(["reddit.com until 17:00 (schedule)", "youtube.com until 14:30"]);
   });
 
+  // Issue #18 TC7: a hand-written state.json with a reserved key.
+  it("describeLocked() tolerates a crafted \"__proto__\" site key without throwing or polluting Object.prototype", () => {
+    const state = { locked: true, sites: JSON.parse('{"__proto__":{"locked":true}}') };
+    let lines;
+    expect(() => {
+      lines = pill.describeLocked(state, NOW);
+    }).not.toThrow();
+    // Either the literal name or nothing — never a crash, never a pollution.
+    expect(lines.every((l) => typeof l === "string")).toBe(true);
+    expect(({}).locked).toBeUndefined();
+    expect(Object.prototype.locked).toBeUndefined();
+  });
+
   it("falls back to the legacy single lastBlocked field when no per-site snapshot exists", () => {
     expect(pill.describeLocked({ locked: true, lastBlocked: "youtube.com" }, NOW)).toEqual(["youtube.com"]);
     expect(pill.describeLocked({ locked: false }, NOW)).toEqual([]);

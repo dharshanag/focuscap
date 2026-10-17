@@ -36,11 +36,32 @@ function readState() {
   }
 }
 
+// The file names the site the user was just blocked on and their lock
+// timing — nothing secret, but nothing another local account needs to read
+// either, so the directory is 0700 and the file 0600 (issue #10). `mode` on
+// mkdirSync/writeFileSync only applies to paths this call creates, hence the
+// explicit chmod afterwards for a dir/file that already existed with looser
+// bits. The chmod is best-effort: on Windows the mode bits are a no-op (and
+// chmod may throw EPERM), and a read-only edge case must not turn a write
+// that already succeeded into a failure.
+const DIR_MODE = 0o700;
+const FILE_MODE = 0o600;
+
+function tightenMode(target, mode) {
+  try {
+    fs.chmodSync(target, mode);
+  } catch (_) {
+    // best-effort: see above
+  }
+}
+
 function writeState(partial) {
-  fs.mkdirSync(STATE_DIR, { recursive: true });
+  fs.mkdirSync(STATE_DIR, { recursive: true, mode: DIR_MODE });
   // The version marker is ours, never the caller's: a patch can't downgrade it.
   const next = { ...readState(), ...partial, schemaVersion: STATE_SCHEMA_VERSION, updatedAt: Date.now() };
-  fs.writeFileSync(STATE_FILE, JSON.stringify(next, null, 2));
+  fs.writeFileSync(STATE_FILE, JSON.stringify(next, null, 2), { mode: FILE_MODE });
+  tightenMode(STATE_DIR, DIR_MODE);
+  tightenMode(STATE_FILE, FILE_MODE);
   return next;
 }
 

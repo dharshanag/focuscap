@@ -4,10 +4,11 @@
 //
 // shared.js is loaded before this file and provides the bare globals used
 // here: todayKey, fmtClock, parseIntOr, fmtUntil, describeStatus, ruleInGrace,
-// normalizeSite, normalizeUsage, evaluateSite, scheduleStateAt,
-// scheduleBlackoutUntil, SCHED_DAY_ABBR and SCHEDULE_DEFAULTS. Per-site status
-// is computed with the SAME pure helpers background.js enforces with, so what
-// this page shows can never disagree with what actually gets blocked.
+// normalizeDomain, normalizeSite, normalizeUsage, evaluateSite,
+// scheduleStateAt, scheduleBlackoutUntil, SCHED_DAY_ABBR and
+// SCHEDULE_DEFAULTS. Per-site status is computed with the SAME pure helpers
+// background.js enforces with, so what this page shows can never disagree
+// with what actually gets blocked.
 
 const get = (keys) => chrome.storage.local.get(keys);
 const set = (obj) => chrome.storage.local.set(obj);
@@ -29,12 +30,6 @@ const DAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 const el = (id) => document.getElementById(id);
-
-function normalizeDomain(raw) {
-  let d = (raw || "").trim().toLowerCase();
-  d = d.replace(/^https?:\/\//, "").replace(/^www\./, "");
-  return d.split("/")[0].split(":")[0];
-}
 
 // Removing a site is blocked once it's fully locked, or in the final 5
 // minutes of its budget — the exact window you'd be tempted to game.

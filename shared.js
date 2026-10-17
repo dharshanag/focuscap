@@ -300,6 +300,25 @@ function scheduleBlackoutUntil(schedule, date) {
 
 // ---- Per-site evaluation (shared by background.js enforcement, the popup, and the badge) ----
 
+// What the user typed in an add-site field -> a bare lowercase hostname:
+// protocol, leading "www.", path and port stripped. "" when nothing usable
+// is left. Shared by the popup and the options page so both forms accept
+// exactly the same input.
+//
+// The names an object inherits from Object.prototype are rejected AFTER the
+// strip, so `https://__proto__/x` is refused too: a tracked domain is used
+// as a key in the per-site usage / snapshot maps, and although those maps
+// are null-prototype (see normalizeUsage / siteUsage) nothing downstream
+// should ever have to think about `sites["constructor"]`. A real label that
+// merely contains the word (proto.example.com) is fine. (Issue #18.)
+const RESERVED_DOMAINS = new Set(["__proto__", "constructor", "prototype"]);
+function normalizeDomain(raw) {
+  let d = String(raw || "").trim().toLowerCase();
+  d = d.replace(/^https?:\/\//, "").replace(/^www\./, "");
+  d = d.split("/")[0].split(":")[0];
+  return RESERVED_DOMAINS.has(d) ? "" : d;
+}
+
 // Match a page hostname against the user's distraction list.
 // "youtube.com" matches youtube.com and www.youtube.com and m.youtube.com.
 function matchSite(hostname, sites) {
@@ -343,11 +362,17 @@ function normalizeSite(site) {
 // everything, and a per-site cool-down that has expired hands that site a
 // fresh allowance (otherwise it'd re-lock on the very next heartbeat).
 // Pure — callers decide whether to persist the result.
+//
+// The per-site map is a null-prototype object: it's keyed by domain, and a
+// stored record is whatever chrome.storage hands back, so a key such as
+// "__proto__" (a crafted or hand-edited record) must land as an ordinary own
+// property rather than resolve to — or rewrite — Object.prototype. The map
+// still JSON-round-trips and structured-clones like a plain object.
 function normalizeUsage(stored, now) {
   const today = todayKey();
   let usage = stored && typeof stored === "object" ? stored : null;
   if (!usage || usage.date !== today) usage = { date: today, totalMs: 0, sites: {} };
-  const sites = {};
+  const sites = Object.create(null);
   const storedSites = usage.sites && typeof usage.sites === "object" ? usage.sites : {};
   for (const [domain, raw] of Object.entries(storedSites)) {
     // Tolerate a corrupted entry rather than throwing — a rejection here in
@@ -363,8 +388,18 @@ function normalizeUsage(stored, now) {
   return { date: usage.date, totalMs: usage.totalMs || 0, sites };
 }
 
+// This site's usage record, created on first use (a corrupt non-object entry
+// counts as missing). Own-property checks only: a `usage.sites` that is still
+// a plain object (a caller that bypassed normalizeUsage) must never hand out
+// Object.prototype for "__proto__", so the entry is defined as an own data
+// property rather than assigned through the inherited setter.
 function siteUsage(usage, domain) {
-  return usage.sites[domain] || (usage.sites[domain] = { totalMs: 0 });
+  if (!usage.sites || typeof usage.sites !== "object") usage.sites = Object.create(null);
+  const own = Object.hasOwn(usage.sites, domain) ? usage.sites[domain] : null;
+  if (!own || typeof own !== "object") {
+    Object.defineProperty(usage.sites, domain, { value: { totalMs: 0 }, writable: true, enumerable: true, configurable: true });
+  }
+  return usage.sites[domain];
 }
 
 function lockoutEndFor(site, now) {
@@ -447,6 +482,7 @@ if (typeof module !== "undefined" && module.exports) {
     scheduleStateAt,
     scheduleBlackoutUntil,
     usageAccrues,
+    normalizeDomain,
     matchSite,
     SITE_DEFAULTS,
     nextLocalMidnightMs,

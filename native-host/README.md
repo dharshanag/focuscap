@@ -56,7 +56,10 @@ lookup happens on each `connectNative()` call.
 Each writes a `com.focuscap.host.json` native messaging host manifest to the
 right per-OS location (see each script) pointing at `host.js`
 (`host.bat` wrapper on Windows, since Chrome can't run a `.js` shebang
-directly there) and restricts `allowed_origins` to the extension ID. On
+directly there) and restricts `allowed_origins` to the extension ID. The
+macOS/Linux scripts build that manifest with `node` (`JSON.stringify` over
+the template object) rather than `sed`, so a checkout path or extension ID
+containing `#`, `&` or `\` is written literally. On
 macOS/Windows restart Chrome afterwards; on Linux the manifest is looked up
 on each `connectNative()` call, so no restart is needed.
 
@@ -87,9 +90,9 @@ wins; a reader that catches a half-written file falls back to defaults), so
 nothing is permanently corrupted — but "the" lock state is only meaningful
 while one profile is running.
 
-Known gaps: the `focusSites` field is passed through unsanitized (nothing
-reads it yet — GitHub issue #18), and error replies may include the local
-state-file path (#9).
+`focusSites` is whitelisted entry by entry to
+`{ domain, budgetSeconds, lockoutSeconds, rules }` with the same defaults
+`shared.js`'s `normalizeSite()` applies (nothing reads it from the file yet).
 
 ## Test the host manually, without Chrome at all
 
@@ -111,7 +114,11 @@ The reply on stdout is a length-prefixed
 `{"ok":true,"version":"0.1.0","protocolVersion":1}` — `version` is the
 host's own (the repo's `package.json`), `protocolVersion` the wire protocol
 it speaks; a frame that can't be parsed or written gets
-`{"ok":false,"error":"…"}` with the same two fields. The extension compares
+`{"ok":false,"error":"internal error"}` with the same two fields — the
+`error` string is always that fixed text, never the underlying message (an
+`fs` error would embed the absolute state-file path, a parse error the
+input); the full detail goes to the host's stderr, which stays on this
+machine (Chrome collects it into its own log). The extension compares
 `protocolVersion` with its own expectation and logs a console warning on a
 mismatch (GitHub issue #12, phase 1 — no UI yet). Then check
 `~/.focuscap/state.json` — it should show `"locked": true`,
