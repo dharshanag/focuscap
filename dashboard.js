@@ -1,4 +1,4 @@
-// Focus Cap — dashboard popup logic. Reads/writes chrome.storage.local;
+// dashboard popup logic. Reads/writes chrome.storage.local;
 // the background worker and content scripts react to those changes.
 
 const DEFAULT_BUDGET_SECONDS = 1800; // daily allowance (30 min)
@@ -7,8 +7,8 @@ const MIN_BUDGET_SECONDS = 60; // at least 1 minute
 const REMOVE_LOCK_MS = 5 * 60 * 1000; // can't remove sites in the last 5 min
 
 // Removing a site is blocked once you're fully locked, or in the final 5
-// minutes of your budget — the exact window you'd be tempted to game.
-// (Skipped for tiny budgets of ≤5 min, which would otherwise never allow it.)
+// minutes of your budget
+// Skipped for tiny budgets of 5 min or less
 function removalLocked(usedMs, budgetMs) {
   if (usedMs >= budgetMs) return true;
   if (budgetMs <= REMOVE_LOCK_MS) return false;
@@ -166,7 +166,7 @@ async function saveBudget() {
   }
   const hours = parseInt(el("budgetHours").value, 10) || 0;
   const minutes = parseInt(el("budgetMinutes").value, 10) || 0;
-  // Combine and clamp to [1 min, 2 hours].
+  // Combine [1 min, 2 hours].
   const total = Math.min(
     MAX_BUDGET_SECONDS,
     Math.max(MIN_BUDGET_SECONDS, hours * 3600 + minutes * 60)

@@ -1,7 +1,3 @@
-// Focus Cap — background service worker.
-// Tracks how much active time you spend on distraction sites each day against a
-// single daily budget. When today's budget is spent (or during a scheduled
-// blackout), those sites lock. Everything resets automatically at midnight.
 
 importScripts("schedule.js"); // scheduleStateAt() + time helpers
 
@@ -67,8 +63,7 @@ function matchSite(hostname, sites) {
 
 const BLOCK_PAGE = "time-is-up.html";
 
-// Stash which site was blocked + why (for the page to display) and send the tab
-// to a clean URL — no query string, so the bar just reads ".../time-is-up.html".
+// Stash which site was blocked + why (for the page to display)
 async function redirectToBlock(tabId, hostname, reason) {
   await set({
     lastBlocked: (hostname || "").replace(/^www\./, ""),
@@ -80,18 +75,17 @@ async function redirectToBlock(tabId, hostname, reason) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   handle(msg)
     .then((res) => {
-      // If the site should be blocked right now, kick the tab to the blocked page.
+      // If  site should be blocked right now, send  tab to the blocked page.
       if (res && res.overlay && sender.tab && sender.tab.id != null) {
         redirectToBlock(sender.tab.id, msg.hostname, res.blackout ? "blackout" : "budget");
       }
       sendResponse(res);
     })
     .catch(() => sendResponse({}));
-  return true; // keep the message channel open for the async response
+  return true; 
 });
 
-// Should a blocked site be off-limits right now? Considers the schedule
-// (blackout / off-hours) as well as whether today's budget is spent.
+// considers schedule (blackout / off-hours) as well as whether today's budget is spent.
 async function blockDecision() {
   const stored = await get(["focusSites", "usage", "budgetSeconds", "schedule"]);
   const focusSites = stored.focusSites || [];
@@ -104,8 +98,7 @@ async function blockDecision() {
   return { blockNow, blackout, focusSites };
 }
 
-// Redirect a main-frame navigation to a blocked site (when it should be off
-// right now) to the blocked page — fires before the site renders, so no flash.
+// Redirect  to a blocked site (when it should be off  right now) to the blocked page
 async function guardNavigation(details) {
   if (details.frameId !== 0) return; // top frame only
   let hostname;
@@ -120,7 +113,7 @@ async function guardNavigation(details) {
 }
 
 chrome.webNavigation.onBeforeNavigate.addListener(guardNavigation);
-chrome.webNavigation.onHistoryStateUpdated.addListener(guardNavigation); // SPA nav
+chrome.webNavigation.onHistoryStateUpdated.addListener(guardNavigation);
 
 async function handle(msg) {
   const stored = await get([
@@ -136,7 +129,7 @@ async function handle(msg) {
   const site = matchSite(msg.hostname, focusSites);
   const { enforcing, blackout } = scheduleStateAt(stored.schedule, new Date());
 
-  // Daily rollover: a new calendar day wipes yesterday's budget usage.
+  // new calendar day wipes yesterday's budget usage.
   let usage = stored.usage || { date: today, totalMs: 0 };
   if (usage.date !== today) usage = { date: today, totalMs: 0 };
 
@@ -156,28 +149,27 @@ async function handle(msg) {
     };
   };
 
-  // Content script became engaged with a page — reset the shared clock.
+  // resets shared clock.
   if (msg.type === "entering") {
     if (!domain) return { track: false };
     await set({ lastTickAt: now });
     return reply();
   }
 
-  // Per-second engaged heartbeat while the page is active/focused/non-idle.
+  // checks if page is active/focused/non-idle.
   if (msg.type === "heartbeat") {
     if (!domain) return { track: false };
     // Real elapsed time (capped) so worker-sleep gaps don't over/under count.
     const delta = Math.min(now - (stored.lastTickAt || now), 5000);
     const patch = { lastTickAt: now };
 
-    // Per-domain stats for EVERY site (this is what powers the daily summary).
+    // daily summary
     const stats = stored.stats || {};
     stats[today] = stats[today] || {};
     stats[today][domain] = (stats[today][domain] || 0) + delta;
     patch.stats = pruneStats(stats);
 
-    // Budget usage accrues on blocked sites only while actively enforcing
-    // (not during off-hours, and not during a blackout — which hard-blocks).
+    // Budget usage grows on blocked sites only while actively enforcing
     if (site && enforcing && !blackout) {
       usage.totalMs += delta;
       patch.usage = usage;

@@ -1,4 +1,4 @@
-// Focus Cap — full dashboard (options page). Manages blocked sites, the daily
+// full dashboard (options page). Manages blocked sites, the daily
 // limit, the enforcement/blackout schedule, onboarding, and advanced settings.
 // schedule.js (scheduleStateAt, SCHED_DAY_ABBR) is loaded before this file.
 
@@ -38,14 +38,14 @@ function normalizeDomain(raw) {
   return d.split("/")[0].split(":")[0];
 }
 // Removing a site is blocked in the final 5 min of budget (or once spent),
-// unless the whole budget is ≤5 min (which would otherwise never allow it).
+// unless the whole budget is 5 min or less (which would otherwise never allow it).
 function removalLocked(usedMs, budgetMs) {
   if (usedMs >= budgetMs) return true;
   if (budgetMs <= REMOVE_LOCK_MS) return false;
   return budgetMs - usedMs <= REMOVE_LOCK_MS;
 }
 
-let store = {}; // cached storage snapshot
+let store = {};
 function schedule() {
   return Object.assign({}, DEFAULT_SCHEDULE, store.schedule || {});
 }
@@ -73,19 +73,19 @@ function render() {
 
 function renderAdvanced() {
   const s = store.settings || {};
-  const enabled = s.idleEnabled !== false; // default on (back-compat with older data)
+  const enabled = s.idleEnabled !== false;   
   el("idleEnabled").checked = enabled;
   el("idleInput").value = s.idleSeconds ?? 45;
   reflectIdleEnabled(enabled);
 }
 
-// Enable/disable the seconds field to match the checkbox (visual only until Save).
+// Enable/disable the seconds field to match the checkbox 
 function reflectIdleEnabled(enabled) {
   el("idleSecondsRow").classList.toggle("disabled", !enabled);
   el("idleInput").disabled = !enabled;
 }
 
-// --- Onboarding --------------------------------------------------------------
+// --- Onboarding ----------------------------
 
 function renderOnboarding() {
   const box = el("onboard");
@@ -371,9 +371,7 @@ el("statsLink").addEventListener("click", (e) => {
   chrome.tabs.create({ url: chrome.runtime.getURL("stats.html") });
 });
 
-// Live-refresh on external changes. Keep the cache fresh, but only rebuild the
-// structural UI on real config changes — a per-second usage tick just refreshes
-// the countdown, so it never disrupts editing the schedule.
+// Live-refresh on external changes
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   for (const k of Object.keys(changes)) store[k] = changes[k].newValue;

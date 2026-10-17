@@ -1,7 +1,6 @@
-// Focus Cap — domain classifier. Buckets a hostname into "distraction",
-// "productive", or "neutral" using a curated list of well-known domains.
-// Loaded before stats.js on the stats page. Kept deliberately simple and local
-// (no network calls) — unknown domains fall through to "neutral".
+// Focus Cap domain classifier. puts a hostname into "distraction",
+// "productive", or "neutral" using a list of well-known domains.
+// Loaded before stats.js on stats page. unknown domains fall to "neutral".
 
 const DISTRACTION_DOMAINS = [
   "youtube.com", "facebook.com", "instagram.com", "twitter.com", "x.com",
@@ -9,7 +8,7 @@ const DISTRACTION_DOMAINS = [
   "primevideo.com", "disneyplus.com", "hbomax.com", "max.com", "pinterest.com",
   "snapchat.com", "tumblr.com", "9gag.com", "buzzfeed.com", "imgur.com",
   "quora.com", "threads.net", "dailymotion.com", "espn.com", "ign.com",
-  "kotaku.com", "polygon.com", "tmz.com", "vice.com", "ladbible.com"
+  "kotaku.com", "polygon.com", "tmz.com", "vice.com", "ladbible.com", "open.spotify.com"
 ];
 
 const PRODUCTIVE_DOMAINS = [
@@ -19,7 +18,8 @@ const PRODUCTIVE_DOMAINS = [
   "notion.so", "figma.com", "linear.app", "atlassian.net", "trello.com",
   "asana.com", "slack.com", "overleaf.com", "wikipedia.org", "khanacademy.org",
   "coursera.org", "udemy.com", "edx.org", "leetcode.com", "hackerrank.com",
-  "canva.com", "zoom.us", "office.com", "dropbox.com", "duolingo.com"
+  "canva.com", "zoom.us", "office.com", "dropbox.com", "duolingo.com", 
+  "classroom.google.com"
 ];
 
 // Classify a hostname/domain. `blocked` overrides to "distraction" visually,

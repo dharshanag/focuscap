@@ -27,15 +27,13 @@
   }
 
   function isEngaged() {
-    // Must be the foreground, visible tab. (A backgrounded music tab is hidden
-    // → never counts. That case still holds.)
+    // Must be the foreground, visible tab. 
     if (document.visibilityState !== "visible") return false;
-    // Idle-pausing can be turned off in the dashboard — then all foreground
-    // time counts. (Treat missing value as "on" for older stored settings.)
+    // Idle-pausing can be turned off in the dashboard then all foreground
+    // time counts. 
     if (settings.idleEnabled === false) return true;
-    // Recent interaction counts — even if a browser popup/menu (or the Focus Cap
-    // popup) briefly stole keyboard focus. We deliberately do NOT require
-    // document.hasFocus() here, so opening the extensions menu won't pause you.
+    // Recent interaction counts if a browser popup/menu briefly took keyboard focus. 
+    // opening the extensions menu won't pause you.
     if (Date.now() - lastInputAt < settings.idleSeconds * 1000) return true;
     // Passive video counts only while the page is truly focused, so a video
     // left playing after you alt-tab to another app doesn't keep draining time.
@@ -66,8 +64,7 @@
   }
 
   // The countdown badge belongs on a blocked site only while the budget is
-  // actually being spent — not off-hours, and not during a blackout (blocked
-  // outright, so the tab gets redirected anyway).
+  // actually being spent
   function badgeWanted(res) {
     return res.blocked && res.enforcing && !res.blackout;
   }
@@ -82,7 +79,7 @@
   }
 
   async function tick() {
-    // Idle / hidden → pause counting, but stay attached.
+    // Idle / hidden pauses counting
     if (!isEngaged()) return;
     const res = await send("heartbeat");
     if (!res || !res.track) {
@@ -114,8 +111,7 @@
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   }
 
-  // Compute remaining daily time straight from storage — independent of the
-  // message reply, so the badge is robust to background/version mismatches.
+  // Compute remaining daily time straight from storage
   async function refreshBadge() {
     if (!badgeEl) return;
     let store;
@@ -182,8 +178,7 @@
     if (document.visibilityState === "visible") start();
   }
 
-  // Pause only when the tab is actually hidden (switched away / minimized) — NOT
-  // on a plain window blur, which fires for the extensions menu and our popup.
+  // Pause only when the tab is actually hidden (switched away / minimized) 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") evaluate();
     else stop();
