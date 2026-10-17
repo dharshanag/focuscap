@@ -37,7 +37,7 @@ const messages = ["You're doing amazing; Keep going!", "Keep at it, and you'll b
    "The more you work now, the less you'll stress later.",
     "You know this isn't what you're supposed to be doing right now. You're doing great.", 
     "Lock in! You're doing awesome."];
-const randomIndex = Math.floor(Math.random()*messages.length);
+const randomIndex = Math.floor(Math.random() * messages.length);
 const randomMessage = messages[randomIndex];
 
 const today = new Date().toDateString();
@@ -50,6 +50,7 @@ if (blockViews >= 1) {
 }
 localStorage.setItem("views", blockViews + 1);
 localStorage.setItem("viewsDay", today);
+
 
 tickCountdown();
 setInterval(tickCountdown, 1000);
