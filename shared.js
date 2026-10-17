@@ -78,7 +78,21 @@ function ruleInGrace(rule, now = Date.now()) {
 // site has any allow rules at all, it's blocked outside every allow window;
 // with no rules the schedule has no opinion and budgets decide.
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+// Safety cap for the "walk forward through adjacent windows" loops below:
+// enough to cross a full week of back-to-back windows, never unbounded.
+const MAX_WINDOW_HOPS = 64;
+
+// The absolute ms of `minutes` past local midnight, `dayOffset` days after
+// `base`'s calendar day. Resolved through the Date wall-clock setters, NOT by
+// adding 24h multiples: across a DST change a local day is 23 or 25 hours
+// long, so "+ n * 24h" lands an hour off. (Issue #15.)
+function localTimeMs(base, dayOffset, minutes) {
+  const d = new Date(base);
+  d.setDate(d.getDate() + dayOffset);
+  d.setHours(0, 0, 0, 0);
+  d.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+  return d.getTime();
+}
 
 // "09:30" -> 570 (minutes since local midnight). Returns null if malformed.
 function parseHHMM(s) {
@@ -122,49 +136,59 @@ function scheduleVerdict(rules, date) {
   return allows.some((r) => ruleActiveAt(r, date)) ? "allow" : "block";
 }
 
-// When does the current schedule-driven block end? For an active block
-// window: that window's end. For "outside every allow window": the next
-// allow window's start (searched up to 7 days out). null if not blocked by
-// schedule or if nothing is found.
-function scheduleBlockedUntil(rules, date) {
-  const list = Array.isArray(rules) ? rules : [];
-  const now = new Date(date);
-  const verdict = scheduleVerdict(list, now);
-  if (verdict !== "block") return null;
-
-  const activeBlocks = list.filter((r) => r && r.type === "block" && ruleActiveAt(r, now));
-  if (activeBlocks.length) {
-    // Latest end among active block windows, resolved to an absolute time.
-    let latest = null;
-    for (const r of activeBlocks) {
-      const start = parseHHMM(r.start);
-      const end = parseHHMM(r.end);
-      const base = startOfDay(now).getTime();
-      const minutes = now.getHours() * 60 + now.getMinutes();
-      // If we're in the post-midnight tail of a wrapped window, its end is today; otherwise
-      // a wrapped window's end is tomorrow.
-      const endsTomorrow = end <= start && minutes >= start;
-      const endMs = base + end * 60 * 1000 + (endsTomorrow ? DAY_MS : 0);
-      if (latest === null || endMs > latest) latest = endMs;
-    }
-    return latest;
+// Latest end, as absolute ms, among the block windows active at `at`.
+// A wrapped window (22:00-02:00) entered before midnight ends tomorrow; in
+// its post-midnight tail it ends today. null if none is active.
+function activeBlockEnd(list, at) {
+  const minutes = at.getHours() * 60 + at.getMinutes();
+  let latest = null;
+  for (const r of list) {
+    if (!r || r.type !== "block" || !ruleActiveAt(r, at)) continue;
+    const start = parseHHMM(r.start);
+    const end = parseHHMM(r.end);
+    const endsTomorrow = end <= start && minutes >= start;
+    const endMs = localTimeMs(at, endsTomorrow ? 1 : 0, end);
+    if (latest === null || endMs > latest) latest = endMs;
   }
+  return latest;
+}
 
-  // Outside every allow window: find the soonest upcoming allow start.
+// Soonest allow-window start strictly after `at`, searched a week out.
+function nextAllowStart(list, at) {
   let soonest = null;
   for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
-    const dayStart = startOfDay(now).getTime() + dayOffset * DAY_MS;
-    const dow = new Date(dayStart).getDay();
+    const dow = new Date(localTimeMs(at, dayOffset, 0)).getDay();
     for (const r of list) {
       if (!r || r.type !== "allow" || !Array.isArray(r.days) || !r.days.includes(dow)) continue;
       const start = parseHHMM(r.start);
       if (start === null) continue;
-      const t = dayStart + start * 60 * 1000;
-      if (t > now.getTime() && (soonest === null || t < soonest)) soonest = t;
+      const t = localTimeMs(at, dayOffset, start);
+      if (t > at.getTime() && (soonest === null || t < soonest)) soonest = t;
     }
     if (soonest !== null) break;
   }
   return soonest;
+}
+
+// When does the current schedule-driven block end? Walks forward from `date`
+// until the schedule no longer says "block": through the active block
+// window's end, then on through any window that starts right where the
+// previous one ended (09-12 then 12-17 reports 17:00, not 12:00), and
+// through "outside every allow window" stretches to the next allow start.
+// null if not blocked by schedule, or if the block has no foreseeable end
+// (an allow rule whose days never match) — callers show "indefinitely".
+function scheduleBlockedUntil(rules, date) {
+  const list = Array.isArray(rules) ? rules : [];
+  let t = new Date(date);
+  if (scheduleVerdict(list, t) !== "block") return null;
+  for (let hop = 0; hop < MAX_WINDOW_HOPS; hop++) {
+    const end = activeBlockEnd(list, t);
+    const next = end !== null ? end : nextAllowStart(list, t);
+    if (next === null || next <= t.getTime()) return null;
+    t = new Date(next);
+    if (scheduleVerdict(list, t) !== "block") return t.getTime();
+  }
+  return null;
 }
 
 // ---- Global schedule: enforcement windows + blackouts ----
@@ -223,25 +247,38 @@ function scheduleStateAt(schedule, date) {
   return { enforcing, blackout };
 }
 
-// Absolute ms at which the blackout active at `date` ends — the latest end
-// among every blackout matching right now; an overnight blackout entered
-// before midnight ends tomorrow. null when no blackout is active.
-function scheduleBlackoutUntil(schedule, date) {
-  const now = date === undefined ? new Date() : new Date(date);
-  if (!schedule || !schedule.enabled) return null;
-  const day = now.getDay();
-  const mins = now.getHours() * 60 + now.getMinutes();
-  const base = startOfDay(now).getTime();
+// Latest end, as absolute ms, among the blackouts active at `at`; an
+// overnight blackout entered before midnight ends tomorrow. null if none.
+function activeBlackoutEnd(schedule, at) {
+  const day = at.getDay();
+  const mins = at.getHours() * 60 + at.getMinutes();
   let latest = null;
   for (const b of schedList(schedule.blackouts)) {
     if (!schedBlackoutMatches(b, day, mins)) continue;
     const s = schedToMin(b.start);
     const e = schedToMin(b.end);
     const endsTomorrow = s > e && mins >= s;
-    const endMs = base + e * 60 * 1000 + (endsTomorrow ? DAY_MS : 0);
+    const endMs = localTimeMs(at, endsTomorrow ? 1 : 0, e);
     if (latest === null || endMs > latest) latest = endMs;
   }
   return latest;
+}
+
+// Absolute ms at which the blackout active at `date` ends, walking through
+// blackouts that start right where the previous one ended (and resolving
+// ends through the wall clock, so DST days don't shift it by an hour).
+// null when no blackout is active.
+function scheduleBlackoutUntil(schedule, date) {
+  let t = date === undefined ? new Date() : new Date(date);
+  if (!schedule || !schedule.enabled) return null;
+  for (let hop = 0; hop < MAX_WINDOW_HOPS; hop++) {
+    const end = activeBlackoutEnd(schedule, t);
+    if (end === null) return hop === 0 ? null : t.getTime();
+    if (end <= t.getTime()) return null;
+    t = new Date(end);
+    if (!scheduleStateAt(schedule, t).blackout) return t.getTime();
+  }
+  return null;
 }
 
 // ---- Per-site evaluation (shared by background.js enforcement, the popup, and the badge) ----

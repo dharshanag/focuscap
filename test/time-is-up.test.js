@@ -74,8 +74,22 @@ describe("time-is-up.js", () => {
       const { page } = await loadPage({});
       expect(page.describeBlock("schedule", at(2, 0, 1), at(23)).until).toBe(at(2, 0, 1));
       expect(page.describeBlock("schedule", at(18, 0, 1), at(12)).until).toBe(at(18, 0, 1));
-      // Unknown end (e.g. an allow rule whose days never match): fall back to midnight.
-      expect(page.describeBlock("schedule", null, at(12)).until).toBe(at(0, 0, 1));
+      // Unknown end (an allow rule whose days never match): the block does not
+      // end at midnight, so don't promise that — say "indefinitely" and give
+      // nothing to count down to. (Issue #15.)
+      const indefinite = page.describeBlock("schedule", null, at(12));
+      expect(indefinite.until).toBeNull();
+      expect(indefinite.resetLabel).toBe("");
+      expect(indefinite.body).toMatch(/indefinitely/);
+    });
+
+    it("renders an indefinite schedule block with no countdown line", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 0, 14, 12, 0, 0));
+      await loadPage({ lastBlocked: "youtube.com", lastBlockedReason: "schedule", lastBlockedUntil: null });
+      expect(document.getElementById("headline").textContent).toBe("Blocked right now");
+      expect(document.getElementById("body").textContent).toMatch(/indefinitely/);
+      expect(document.getElementById("resetLine").textContent).toBe("");
     });
 
     it("the global cap always resets at midnight and says so", async () => {

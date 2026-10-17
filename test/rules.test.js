@@ -136,6 +136,84 @@ describe("shared.js schedule rules", () => {
 
 // --- Global schedule (main's model): enforcement windows + blackouts, layered
 // over the per-site rules above. Semantics ported from main's schedule.js. ---
+// Issue #15: "unblocks at" times were computed by adding 24h multiples and
+// took only the active window's end. Across a DST change a local day is 23
+// or 25 hours, and back-to-back windows should report the end of the run.
+describe("scheduleBlockedUntil() / scheduleBlackoutUntil() — adjacent windows and DST (issue #15)", () => {
+  // First local day of the year whose UTC offset differs from the next day's,
+  // i.e. the day before a DST transition. null when the host TZ has no DST
+  // (CI runners are UTC) — those cases are skipped there, not faked.
+  function dayBeforeDstChange(year) {
+    for (let m = 0; m < 12; m++) {
+      for (let d = 1; d <= 31; d++) {
+        const a = new Date(year, m, d, 12);
+        const b = new Date(year, m, d + 1, 12);
+        if (a.getMonth() !== m) break;
+        if (a.getTimezoneOffset() !== b.getTimezoneOffset()) return a;
+      }
+    }
+    return null;
+  }
+  const dstEve = dayBeforeDstChange(2026);
+  const hasDst = dstEve !== null;
+  const local = (base, dayOffset, h, m = 0) => new Date(base.getFullYear(), base.getMonth(), base.getDate() + dayOffset, h, m, 0, 0);
+
+  it("adjacent block windows report the end of the whole run, not the first window's end", () => {
+    const rules = [
+      { type: "block", days: [WED], start: "09:00", end: "12:00" },
+      { type: "block", days: [WED], start: "12:00", end: "17:00" }
+    ];
+    expect(shared.scheduleBlockedUntil(rules, at(10))).toBe(at(17).getTime());
+    // Asked inside the second window it's the same answer.
+    expect(shared.scheduleBlockedUntil(rules, at(14))).toBe(at(17).getTime());
+    // A gap between windows ends the run.
+    const gapped = [rules[0], { type: "block", days: [WED], start: "12:30", end: "17:00" }];
+    expect(shared.scheduleBlockedUntil(gapped, at(10))).toBe(at(12).getTime());
+  });
+
+  it("a block window that ends where an allow-only stretch begins keeps walking to the next allow start", () => {
+    const rules = [
+      { type: "block", days: [WED], start: "09:00", end: "12:00" },
+      { type: "allow", days: [WED], start: "18:00", end: "20:00" }
+    ];
+    // 09-12 blocked by the window, 12-18 blocked for being outside the allow window.
+    expect(shared.scheduleBlockedUntil(rules, at(10))).toBe(at(18).getTime());
+  });
+
+  it("returns null (indefinite) when no allow window can ever match, instead of a bogus time", () => {
+    expect(shared.scheduleBlockedUntil([{ type: "allow", days: [], start: "09:00", end: "10:00" }], at(12))).toBeNull();
+  });
+
+  it("adjacent blackouts report the end of the whole run", () => {
+    const s = { enabled: true, days: [0, 1, 2, 3, 4, 5, 6], windows: [], blackouts: [{ start: "12:00", end: "13:00" }, { start: "13:00", end: "15:00" }] };
+    expect(shared.scheduleBlackoutUntil(s, at(12, 30))).toBe(at(15).getTime());
+  });
+
+  it.skipIf(!hasDst)("a block window entered before a DST change ends at the wall-clock time, not 24h-arithmetic off by an hour", () => {
+    // Overnight block window 22:00-06:00 on the eve of the transition: the
+    // end is 06:00 wall-clock the next morning, which is 23 or 25 hours later.
+    const eveDow = dstEve.getDay();
+    const rules = [{ type: "block", days: [eveDow], start: "22:00", end: "06:00" }];
+    const askedAt = local(dstEve, 0, 23);
+    const expected = local(dstEve, 1, 6).getTime();
+    expect(shared.scheduleBlockedUntil(rules, askedAt)).toBe(expected);
+    // Sanity: the old arithmetic would have been exactly an hour off.
+    expect(Math.abs(askedAt.getTime() + 7 * 3600_000 - expected)).toBe(3600_000);
+  });
+
+  it.skipIf(!hasDst)("the next allow start across a DST change is resolved on the wall clock", () => {
+    // Allow-only tomorrow 09:00; asked today at noon, where "today" is the eve.
+    const tomorrowDow = (dstEve.getDay() + 1) % 7;
+    const rules = [{ type: "allow", days: [tomorrowDow], start: "09:00", end: "10:00" }];
+    expect(shared.scheduleBlockedUntil(rules, local(dstEve, 0, 12))).toBe(local(dstEve, 1, 9).getTime());
+  });
+
+  it.skipIf(!hasDst)("an overnight blackout across a DST change ends at the wall-clock time", () => {
+    const s = { enabled: true, days: [0, 1, 2, 3, 4, 5, 6], windows: [], blackouts: [{ start: "22:00", end: "06:00" }] };
+    expect(shared.scheduleBlackoutUntil(s, local(dstEve, 0, 23))).toBe(local(dstEve, 1, 6).getTime());
+  });
+});
+
 describe("shared.js global schedule", () => {
   const SAT = 3; // day offset from Wed Jan 14 -> Sat Jan 17 (getDay() 6)
   const THU = 1; // -> Thu Jan 15 (getDay() 4)

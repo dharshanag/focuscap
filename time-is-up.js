@@ -19,13 +19,12 @@ function describeBlock(reason, until, now) {
     case "schedule":
       // A schedule window can run past midnight (22:00-02:00, or "next allow
       // window is tomorrow"), and the daily reset doesn't end it — so count
-      // to the real window end whenever we know it.
-      return {
-        heading: "Blocked right now",
-        body: "is blocked by your schedule.",
-        resetLabel: "Unblocks in",
-        until: typeof until === "number" ? until : midnight.getTime()
-      };
+      // to the real window end. With no foreseeable end (an allow-only rule
+      // whose days never match) there is nothing to count down to: say so
+      // rather than promise a midnight unlock that won't happen.
+      return typeof until === "number"
+        ? { heading: "Blocked right now", body: "is blocked by your schedule.", resetLabel: "Unblocks in", until }
+        : { heading: "Blocked right now", body: "is blocked by your schedule indefinitely.", resetLabel: "", until: null };
     case "lockout":
     case "budget":
       return {
@@ -122,6 +121,12 @@ if (typeof document !== "undefined" && document.getElementById("countdown")) {
     document.getElementById("body").textContent = ` ${info.body} Go do the thing you meant to do.`;
     document.getElementById("resetLabel").textContent = info.resetLabel;
     document.title = `${domain} — ${info.heading.toLowerCase()}`;
+
+    // No foreseeable end: nothing to count down to, so drop the reset line.
+    if (info.until === null) {
+      document.getElementById("resetLine").textContent = "";
+      return;
+    }
 
     // Renders the countdown; returns true once the lock has expired.
     const tick = () => {
