@@ -368,9 +368,14 @@ function scheduleUnlockAlarm(domain, until) {
   cancelUnlockTimer(domain);
   const delay = until - Date.now();
   if (delay >= ALARM_MIN_DELAY_MS || typeof setTimeout !== "function") return;
+  // The alarm is left armed on purpose as the durable backstop, so in a
+  // packed build it fires a second, identical (idempotent) push at the clamp.
+  // A storage failure here is swallowed: a dropped early push just means the
+  // alarm path reports the unlock instead, and a timer callback has nowhere
+  // to surface a rejection anyway.
   const timer = setTimeout(() => {
     unlockTimers.delete(domain);
-    onUnlockDue(domain);
+    onUnlockDue(domain).catch(() => {});
   }, delay);
   // Under Node (tests) don't let a pending early push keep the process alive.
   if (timer && typeof timer.unref === "function") timer.unref();

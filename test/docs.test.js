@@ -110,7 +110,7 @@ describe("README.md claims match the code", () => {
     const { ALARM_MIN_DELAY_MS } = await import("../background.js");
     expect(ALARM_MIN_DELAY_MS).toBe(30_000);
     // (\s+ because README wraps at 78 columns.)
-    expect(README).toMatch(/packed\/store\s+build Chrome clamps `chrome\.alarms` to a 30-second minimum/);
+    expect(README).toMatch(/packed\/store\s+build Chrome \(120\+; 1 min before\) clamps `chrome\.alarms` to a 30-second\s+minimum/);
     expect(README).toMatch(/companion pill may be told up to 30 s late/);
   });
 });
