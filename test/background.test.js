@@ -18,7 +18,11 @@ async function loadBackground(initialStorage) {
   return { bg, ...mock };
 }
 function cancelStatsTimers() {
-  while (loaded.length) loaded.pop().cancelStatsFlushTimer();
+  while (loaded.length) {
+    const bg = loaded.pop();
+    bg.cancelStatsFlushTimer();
+    bg.cancelUnlockTimers();
+  }
 }
 
 function localTodayKey(ms = Date.now()) {
@@ -730,6 +734,97 @@ describe("background.js", () => {
       // The reset is durable, not just recomputed on this read.
       expect(getStore().usage.sites["youtube.com"].totalMs).toBe(0);
       expect(getStore().usage.sites["youtube.com"].lockedUntil).toBeUndefined();
+    });
+
+    // --- Issue #17: a packed/store build clamps chrome.alarms to a 30 s
+    // minimum, so a cool-down shorter than that would reach the companion
+    // late. The alarm is still created at the real `until` (the durable
+    // backstop; Chrome clamps it itself in a packed build), and a plain timer
+    // at the real unlock time does the same push while the worker is alive.
+    // https://github.com/dharshanag/focuscap/issues/17
+    describe("sub-30 s cool-downs (#17)", () => {
+      async function loadLockedFor(lockoutMs) {
+        vi.useFakeTimers(); // Date AND setTimeout, so advancing the clock fires the timer
+        vi.setSystemTime(new Date(2026, 0, 14, 12, 0, 0));
+        const lockedUntil = Date.now() + lockoutMs;
+        const loadedBg = await loadBackground({
+          focusSites: [{ domain: "youtube.com", budgetSeconds: 60, lockoutSeconds: 600 }],
+          budgetSeconds: 3600,
+          usage: { date: localTodayKey(), totalMs: 60_000, sites: { "youtube.com": { totalMs: 60_000, lockedUntil } } }
+        });
+        const posted = [];
+        loadedBg.chrome.runtime.connectNative = () => ({ postMessage: (m) => posted.push(m), onDisconnect: { addListener: () => {} } });
+        return { ...loadedBg, posted, lockedUntil };
+      }
+
+      it("ALARM_MIN_DELAY_MS is Chrome's 30-second packed-build floor", async () => {
+        const { bg } = await loadBackground({});
+        expect(bg.ALARM_MIN_DELAY_MS).toBe(30_000);
+      });
+
+      it("a cool-down ending in < 30 s arms the alarm at the real end and a timer that pushes the unlock on time", async () => {
+        const { bg, chrome, posted, lockedUntil, getStore } = await loadLockedFor(20_000);
+        const res = await bg.handle({ type: "entering", hostname: "youtube.com" });
+        expect(res.overlay).toBe(true);
+        // The alarm is NOT floored to 30 s — unpacked builds honour it, and a
+        // packed build clamps it by itself.
+        expect(chrome.alarms.create).toHaveBeenCalledWith("unlock:youtube.com", { when: lockedUntil });
+        const before = posted.length;
+
+        await vi.advanceTimersByTimeAsync(19_999);
+        expect(posted.length).toBe(before); // nothing early
+
+        await vi.advanceTimersByTimeAsync(1);
+        await microtasks();
+        expect(Date.now()).toBe(lockedUntil);
+        const snap = posted[before];
+        expect(snap.locked).toBe(false);
+        expect(snap.sites["youtube.com"]).toEqual({ locked: false, reason: null, until: null, remainingMs: 60_000 });
+        expect(posted[posted.length - 1]).toEqual({ lastBlocked: "" });
+        // Same durable reset as the alarm path.
+        expect(getStore().usage.sites["youtube.com"].totalMs).toBe(0);
+        expect(getStore().usage.sites["youtube.com"].lockedUntil).toBeUndefined();
+      });
+
+      it("a cool-down ending in >= 30 s arms only the alarm (no timer)", async () => {
+        const { bg, chrome, posted, lockedUntil } = await loadLockedFor(30_000);
+        await bg.handle({ type: "entering", hostname: "youtube.com" });
+        expect(chrome.alarms.create).toHaveBeenCalledWith("unlock:youtube.com", { when: lockedUntil });
+        const before = posted.length;
+
+        await vi.advanceTimersByTimeAsync(60_000);
+        await microtasks();
+        // Only the (real, clamped-or-not) alarm can report this one.
+        expect(posted.length).toBe(before);
+      });
+
+      it("re-arming the same domain replaces the pending timer, so the unlock is pushed once", async () => {
+        const { bg, posted, lockedUntil } = await loadLockedFor(20_000);
+        await bg.handle({ type: "entering", hostname: "youtube.com" });
+        await vi.advanceTimersByTimeAsync(5_000);
+        await bg.handle({ type: "entering", hostname: "youtube.com" }); // same lock, armed again
+        const before = posted.length;
+
+        await vi.advanceTimersByTimeAsync(lockedUntil - Date.now());
+        await microtasks();
+        // Exactly one snapshot + one lastBlocked clear — not two of each.
+        expect(posted.slice(before)).toEqual([expect.objectContaining({ locked: false }), { lastBlocked: "" }]);
+      });
+
+      it("when the unlock alarm fires first, the pending timer is cancelled", async () => {
+        const { bg, listeners, posted, lockedUntil } = await loadLockedFor(20_000);
+        await bg.handle({ type: "entering", hostname: "youtube.com" });
+        const before = posted.length;
+
+        vi.setSystemTime(lockedUntil); // Date only — the fake timer is still pending
+        await listeners.onAlarm[0]({ name: bg.UNLOCK_ALARM_PREFIX + "youtube.com" });
+        expect(posted.slice(before)).toEqual([expect.objectContaining({ locked: false }), { lastBlocked: "" }]);
+        const afterAlarm = posted.length;
+
+        await vi.advanceTimersByTimeAsync(60_000);
+        await microtasks();
+        expect(posted.length).toBe(afterAlarm);
+      });
     });
 
     it("does not arm an unlock alarm for a lock whose end is unknown or already past", async () => {

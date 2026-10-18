@@ -333,9 +333,59 @@ function snapshotForHost(focusSites, usage, globalBudgetMs, now, schedule) {
 // alarm at that moment so the companion is told the site unlocked even if
 // nothing heartbeats. Creating an alarm with an existing name replaces it.
 const UNLOCK_ALARM_PREFIX = "unlock:";
+
+// In a packed/store build Chrome clamps a one-shot alarm to a 30-second
+// minimum delay ("Alarm delay is less than minimum of 30 seconds. In released
+// .crx, alarm ... will fire in approximately 30 seconds."); unpacked builds
+// honour any delay. The extension itself still unlocks on time (evaluation is
+// lazy via normalizeUsage on the next visit/heartbeat) — only the companion's
+// notification would lag. So a lock ending sooner than this also arms a plain
+// timer at the real unlock time as a best-effort early push; the alarm stays
+// the durable backstop because a service-worker shutdown drops timers. The
+// alarm itself is deliberately NOT floored: that would delay the unpacked
+// case for nothing, and Chrome clamps the packed case anyway. (#17)
+const ALARM_MIN_DELAY_MS = 30 * 1000;
+const unlockTimers = new Map(); // domain -> pending sub-floor timer
+
+function cancelUnlockTimer(domain) {
+  const timer = unlockTimers.get(domain);
+  if (timer === undefined) return;
+  clearTimeout(timer);
+  unlockTimers.delete(domain);
+}
+
+// Test teardown hook (like cancelStatsFlushTimer) so a timer armed by one
+// module instance can't fire into a later test's mock.
+function cancelUnlockTimers() {
+  for (const domain of [...unlockTimers.keys()]) cancelUnlockTimer(domain);
+}
+
 function scheduleUnlockAlarm(domain, until) {
   if (typeof until !== "number" || until <= Date.now()) return;
   chrome.alarms.create(UNLOCK_ALARM_PREFIX + domain, { when: until });
+  // One pending timer per domain: re-arming replaces the previous one so the
+  // early push can't double-fire.
+  cancelUnlockTimer(domain);
+  const delay = until - Date.now();
+  if (delay >= ALARM_MIN_DELAY_MS || typeof setTimeout !== "function") return;
+  const timer = setTimeout(() => {
+    unlockTimers.delete(domain);
+    onUnlockDue(domain);
+  }, delay);
+  // Under Node (tests) don't let a pending early push keep the process alive.
+  if (timer && typeof timer.unref === "function") timer.unref();
+  unlockTimers.set(domain, timer);
+}
+
+// Shared by the unlock alarm and the sub-floor early-push timer: tell the
+// companion the site's state now, and if the site is free clear the stale
+// "what was blocked" for its pill (if it's still locked for another reason,
+// leave it — pushSnapshot re-arms the later unlock).
+async function onUnlockDue(domain) {
+  cancelUnlockTimer(domain);
+  const snap = await pushSnapshot();
+  const site = snap.sites[domain];
+  if (site && !site.locked) notifyNativeHost({ lastBlocked: "" });
 }
 
 // Runs through the same queue as message handling so its storage write can't
@@ -370,12 +420,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     return;
   }
   if (alarm.name.startsWith(UNLOCK_ALARM_PREFIX)) {
-    const snap = await pushSnapshot();
-    // If the site is now free, clear the stale "what was blocked" for the
-    // companion pill; if it's still locked for another reason, leave it.
-    const domain = alarm.name.slice(UNLOCK_ALARM_PREFIX.length);
-    const site = snap.sites[domain];
-    if (site && !site.locked) notifyNativeHost({ lastBlocked: "" });
+    await onUnlockDue(alarm.name.slice(UNLOCK_ALARM_PREFIX.length));
   }
 });
 
@@ -658,6 +703,8 @@ if (typeof module !== "undefined" && module.exports) {
     pushSnapshot,
     DAILY_RESET_ALARM,
     UNLOCK_ALARM_PREFIX,
+    ALARM_MIN_DELAY_MS,
+    cancelUnlockTimers,
     STATS_DAYS,
     STATS_FLUSH_MS,
     TICK_LIVE_MS,

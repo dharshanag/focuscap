@@ -104,6 +104,14 @@ describe("README.md claims match the code", () => {
     expect(lockout.min).toBe("1");
     expect(lockout.step).toBe("1");
     expect(README).toMatch(/cool-down field takes whole minutes \(minimum 1\)/);
+    // README Known gaps (#17): a packed/store build clamps chrome.alarms to a
+    // 30-second minimum, so the companion can hear about a sub-30 s cool-down
+    // late; the number must match background.js's ALARM_MIN_DELAY_MS.
+    const { ALARM_MIN_DELAY_MS } = await import("../background.js");
+    expect(ALARM_MIN_DELAY_MS).toBe(30_000);
+    // (\s+ because README wraps at 78 columns.)
+    expect(README).toMatch(/packed\/store\s+build Chrome clamps `chrome\.alarms` to a 30-second minimum/);
+    expect(README).toMatch(/companion pill may be told up to 30 s late/);
   });
 });
 

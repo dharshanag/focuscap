@@ -336,6 +336,7 @@ function buildEditor(site, status) {
   mode.value = hasLockout ? "minutes" : "midnight";
   const lockoutMin = document.createElement("input");
   lockoutMin.type = "number";
+  // Whole minutes, minimum 1: a packed build can't report a sub-30 s cool-down on time (#17).
   lockoutMin.min = "1";
   lockoutMin.step = "1";
   lockoutMin.className = "lockout-min";

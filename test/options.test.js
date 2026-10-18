@@ -400,7 +400,10 @@ describe("options.js", () => {
       expect(getStore().focusSites[0].lockoutSeconds).toBeNull();
     });
 
-    it("ignores a non-positive cool-down length", async () => {
+    // #17: the UI can't promise a sub-minute cool-down (a packed build can't
+    // report one to the companion on time), so the field is whole minutes
+    // with min 1 and anything below that is ignored, not clamped or stored.
+    it("ignores a non-positive, fractional or blank cool-down length (#17)", async () => {
       const { opts, getStore } = await loadOptions({
         ...onboarded,
         focusSites: [{ domain: "youtube.com", lockoutSeconds: 600 }],
@@ -409,10 +412,14 @@ describe("options.js", () => {
       opts.expanded.add("youtube.com");
       await opts.load();
       const min = row("youtube.com").querySelector(".lockout-min");
-      min.value = "0";
-      change(min);
-      await flush();
-      expect(getStore().focusSites[0].lockoutSeconds).toBe(600);
+      expect(min.min).toBe("1");
+      expect(min.step).toBe("1");
+      for (const bad of ["0", "0.5", "-1", ""]) {
+        min.value = bad;
+        change(min);
+        await flush();
+        expect(getStore().focusSites[0].lockoutSeconds, `value ${JSON.stringify(bad)}`).toBe(600);
+      }
     });
 
     it("adding, editing, toggling days on, and removing a schedule rule all persist", async () => {
