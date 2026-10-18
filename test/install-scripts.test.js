@@ -88,3 +88,46 @@ describe.skipIf(skip)("native-host install scripts", () => {
     }
   });
 });
+
+// install-windows.ps1 can't be executed here (no PowerShell on Linux/macOS;
+// the windows-latest CI job runs it for real), so this is a static check of
+// the source only: it catches a dropped browser key or a regression from
+// ConvertTo-Json back to string-replacing the template (issue #14), nothing
+// about runtime behaviour. Runs on every OS, win32 included.
+describe("install-windows.ps1 (static check of the source, not executed)", () => {
+  const ps1 = readFileSync(join(root, "native-host", "install-windows.ps1"), "utf8");
+
+  it("registers the host under every Chrome/Chromium/Edge channel key", () => {
+    const keys = [
+      "HKCU:\\Software\\Google\\Chrome",
+      "HKCU:\\Software\\Google\\Chrome Beta",
+      "HKCU:\\Software\\Google\\Chrome SxS",
+      "HKCU:\\Software\\Google\\Chrome for Testing",
+      "HKCU:\\Software\\Chromium",
+      "HKCU:\\Software\\Microsoft\\Edge",
+      "HKCU:\\Software\\Microsoft\\Edge Beta",
+      "HKCU:\\Software\\Microsoft\\Edge Dev",
+      "HKCU:\\Software\\Microsoft\\Edge SxS"
+    ];
+    for (const key of keys) expect(ps1, `missing registry key ${key}`).toContain(`"${key}"`);
+    expect(ps1).toContain("\\NativeMessagingHosts\\com.focuscap.host");
+    expect(ps1).toContain('"(default)"');
+  });
+
+  it("builds the manifest with ConvertFrom-Json/ConvertTo-Json (no placeholder string replacement) and writes it without a BOM", () => {
+    expect(ps1).toMatch(/ConvertFrom-Json/);
+    expect(ps1).toMatch(/ConvertTo-Json/);
+    expect(ps1).not.toMatch(/__HOST_PATH__|__EXTENSION_ID__/);
+    expect(ps1).toContain("[System.Text.UTF8Encoding]::new($false)");
+    // Code lines only: a comment is allowed to explain why Set-Content (BOM
+    // on 5.1) is avoided.
+    const code = ps1.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+    expect(code).not.toMatch(/Set-Content/);
+  });
+
+  it("defaults to the pinned extension ID, stops on errors and refuses to run without node", () => {
+    expect(ps1).toContain('[string]$ExtensionId = "oladakapegoiphmpicedkgnieanibbbe"');
+    expect(ps1).toContain('$ErrorActionPreference = "Stop"');
+    expect(ps1).toMatch(/Get-Command node/);
+  });
+});

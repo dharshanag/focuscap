@@ -212,8 +212,11 @@ planned. See `companion/README.md` and `native-host/README.md`.
 Tracked as GitHub issues so they aren't lost: the companion pill's
 click-through / never-takes-focus behaviour is asserted from Electron flags,
 not observed (#13, closed — the heartbeat path and the pill's rendered text
-are now verified); `install-windows.ps1` registers only
-stable Chrome and has never been run (#14); "unblocks at" times can be off by
+are now verified); the native-host install scripts now run in CI on
+Linux, Windows and macOS (`install-windows.ps1` registers every Chrome
+channel, Chromium and Edge), but `connectNative` against the registered
+host has still only been confirmed in a real browser on Linux, not on
+Windows or macOS (#14); "unblocks at" times can be off by
 an hour across DST or wrong for adjacent windows (#15); in a packed/store
 build Chrome (120+; 1 min before) clamps `chrome.alarms` to a 30-second
 minimum, so a cool-down shorter than 30 s is still enforced on time by the

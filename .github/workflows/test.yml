@@ -6,6 +6,7 @@ on:
 
 jobs:
   test:
+    name: test (ubuntu)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,3 +15,166 @@ jobs:
           node-version: 24
       - run: npm ci
       - run: npm test
+
+  # Issue #14: the Windows/macOS install scripts used to be unexecuted (no
+  # Windows or Mac to hand). These jobs are the only place they run, so they
+  # also assert what the scripts registered. What they cannot do is open a
+  # browser: confirming chrome.runtime.connectNative() against the registered
+  # host (TC3/TC4/TC7) remains a manual step.
+  test-windows:
+    name: test (windows)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      # The runner's git defaults to core.autocrlf=true, which would rewrite
+      # every checked-out file to CRLF; keep the tree byte-identical to the
+      # repo so the suite tests the same files as the other OSes.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm test
+
+      # TC1 + TC2 + TC8 under Windows PowerShell 5.1 (the `powershell` shell).
+      - name: install-windows.ps1 parses, runs, writes the manifest and every registry key (PowerShell 5.1)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tokens = $null; $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ".\native-host\install-windows.ps1").Path, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors -and $errors.Count -gt 0) { $errors | ForEach-Object { Write-Host $_ }; throw "install-windows.ps1 has parse errors" }
+          Write-Host "PSVersion: $($PSVersionTable.PSVersion)"
+
+          # Exactly TC1's invocation, as a child process so the exit code is real.
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\native-host\install-windows.ps1
+          Write-Host "exit code: $LASTEXITCODE"
+          if ($LASTEXITCODE -ne 0) { throw "install-windows.ps1 exited with $LASTEXITCODE" }
+
+          $manifestPath = (Resolve-Path ".\native-host\com.focuscap.host.json").Path
+          $bytes = [System.IO.File]::ReadAllBytes($manifestPath)
+          if ($bytes[0] -eq 0xEF) { throw "manifest starts with a UTF-8 BOM" }
+          Get-Content -LiteralPath $manifestPath -Raw | Write-Host
+          $m = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          if ($m.name -ne "com.focuscap.host") { throw "name: $($m.name)" }
+          if ($m.type -ne "stdio") { throw "type: $($m.type)" }
+          if (-not $m.path.EndsWith("\native-host\host.bat")) { throw "path: $($m.path)" }
+          if (-not (Test-Path -LiteralPath $m.path)) { throw "path does not exist: $($m.path)" }
+          $origins = @($m.allowed_origins)
+          if ($origins.Count -ne 1 -or $origins[0] -ne "chrome-extension://oladakapegoiphmpicedkgnieanibbbe/") { throw "allowed_origins: $($origins -join ',')" }
+
+          $keys = @(
+            "HKCU:\Software\Google\Chrome",
+            "HKCU:\Software\Google\Chrome Beta",
+            "HKCU:\Software\Google\Chrome SxS",
+            "HKCU:\Software\Google\Chrome for Testing",
+            "HKCU:\Software\Chromium",
+            "HKCU:\Software\Microsoft\Edge",
+            "HKCU:\Software\Microsoft\Edge Beta",
+            "HKCU:\Software\Microsoft\Edge Dev",
+            "HKCU:\Software\Microsoft\Edge SxS"
+          )
+          foreach ($k in $keys) {
+            $reg = "$k\NativeMessagingHosts\com.focuscap.host"
+            $value = (Get-ItemProperty -LiteralPath $reg)."(default)"
+            if ($value -ne $manifestPath) { throw "$reg (default) = '$value', expected '$manifestPath'" }
+            Write-Host "OK $reg = $value"
+          }
+
+          # The node guard: without node on PATH the script must fail with a
+          # clear message and a non-zero exit, before touching anything.
+          $savedPath = $env:PATH
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
+          # (cmd merges the streams: a bare 2>&1 on a native command under
+          # 5.1 with ErrorActionPreference=Stop would itself throw.)
+          $guardOutput = cmd /c "powershell -NoProfile -ExecutionPolicy Bypass -File .\native-host\install-windows.ps1 2>&1" | Out-String
+          $guardCode = $LASTEXITCODE
+          $env:PATH = $savedPath
+          Write-Host "without node on PATH -> exit $guardCode, output: $guardOutput"
+          if ($guardCode -eq 0) { throw "install-windows.ps1 should fail when node is not on PATH" }
+          if ($guardOutput -notmatch "'node' was not found on PATH") { throw "missing the node-not-found message" }
+
+      # TC6 under PowerShell 7 (the `pwsh` shell): the override changes the
+      # origin and nothing else; the registry values still point at the same
+      # manifest.
+      - name: install-windows.ps1 -ExtensionId override (PowerShell 7)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "PSVersion: $($PSVersionTable.PSVersion)"
+          pwsh -NoProfile -File .\native-host\install-windows.ps1 -ExtensionId abcdefghijklmnopabcdefghijklmnop
+          Write-Host "exit code: $LASTEXITCODE"
+          if ($LASTEXITCODE -ne 0) { throw "install-windows.ps1 exited with $LASTEXITCODE" }
+          $manifestPath = (Resolve-Path ".\native-host\com.focuscap.host.json").Path
+          $bytes = [System.IO.File]::ReadAllBytes($manifestPath)
+          if ($bytes[0] -eq 0xEF) { throw "manifest starts with a UTF-8 BOM" }
+          $m = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          $origins = @($m.allowed_origins)
+          if ($origins.Count -ne 1 -or $origins[0] -ne "chrome-extension://abcdefghijklmnopabcdefghijklmnop/") { throw "allowed_origins: $($origins -join ',')" }
+          if (-not $m.path.EndsWith("\native-host\host.bat")) { throw "path: $($m.path)" }
+          foreach ($k in "HKCU:\Software\Google\Chrome", "HKCU:\Software\Microsoft\Edge") {
+            $value = (Get-ItemProperty -LiteralPath "$k\NativeMessagingHosts\com.focuscap.host")."(default)"
+            if ($value -ne $manifestPath) { throw "$k (default) = '$value', expected '$manifestPath'" }
+          }
+          Write-Host "OK origin overridden, registry unchanged"
+
+      # TC5: host.bat from a plain cmd, the way Chrome launches it, with a
+      # real wire frame on stdin (native-host/README.md "Test the host
+      # manually") and HOME/USERPROFILE pointed at a scratch directory so the
+      # state file lands there, not in the runner's real profile.
+      - name: host.bat answers a wire frame and writes state.json (cmd)
+        shell: cmd
+        run: |
+          set "FCHOME=%RUNNER_TEMP%\fc-home"
+          mkdir "%FCHOME%" || exit /b 1
+          set "HOME=%FCHOME%"
+          set "USERPROFILE=%FCHOME%"
+          cmd /c "native-host\host.bat" < nul || exit /b 1
+          echo host.bat exited 0 on empty stdin
+          node -e "const msg={locked:true,lastBlocked:'example.com',sites:{'example.com':{locked:true,reason:'lockout',until:Date.now()+600000,remainingMs:0}}};const b=Buffer.from(JSON.stringify(msg));const h=Buffer.alloc(4);h.writeUInt32LE(b.length);process.stdout.write(Buffer.concat([h,b]))" > "%RUNNER_TEMP%\frame.bin" || exit /b 1
+          cmd /c "native-host\host.bat" < "%RUNNER_TEMP%\frame.bin" > "%RUNNER_TEMP%\reply.bin" || exit /b 1
+          node -e "const fs=require('fs');const r=fs.readFileSync(process.argv[1]);const n=r.readUInt32LE(0);const j=r.subarray(4,4+n).toString('utf8');console.log('host reply: '+j);const q=String.fromCharCode(34);if(!j.includes(q+'ok'+q+':true'))process.exit(1);if(JSON.parse(j).ok!==true)process.exit(1)" "%RUNNER_TEMP%\reply.bin" || exit /b 1
+          node -e "const s=require('fs').readFileSync(process.argv[1],'utf8');console.log(s);const q=String.fromCharCode(34);if(!s.includes(q+'locked'+q+': true'))process.exit(1);if(!s.includes(q+'lastBlocked'+q+': '+q+'example.com'+q))process.exit(1)" "%FCHOME%\.focuscap\state.json" || exit /b 1
+          echo OK state.json written with locked: true
+
+  test-macos:
+    name: test (macos)
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm test
+
+      # TC7 minus the in-browser connectNative part: the script runs for
+      # real against the runner's ~/Library and every channel's manifest
+      # parses with the absolute host.js path and the pinned extension ID.
+      - name: install-mac.sh runs and writes every channel's manifest
+        run: |
+          set -euo pipefail
+          bash -n native-host/install-mac.sh
+          ./native-host/install-mac.sh
+          cd "$HOME/Library/Application Support"
+          ls -l "Google/Chrome/NativeMessagingHosts/com.focuscap.host.json" \
+            "Google/Chrome Beta/NativeMessagingHosts/com.focuscap.host.json" \
+            "Google/Chrome Canary/NativeMessagingHosts/com.focuscap.host.json" \
+            "Google/Chrome for Testing/NativeMessagingHosts/com.focuscap.host.json" \
+            "Chromium/NativeMessagingHosts/com.focuscap.host.json"
+          node -e '
+            const fs = require("fs");
+            const expectedPath = process.argv[1];
+            const dirs = ["Google/Chrome", "Google/Chrome Beta", "Google/Chrome Canary", "Google/Chrome for Testing", "Chromium"];
+            for (const d of dirs) {
+              const f = d + "/NativeMessagingHosts/com.focuscap.host.json";
+              const m = JSON.parse(fs.readFileSync(f, "utf8"));
+              if (m.name !== "com.focuscap.host" || m.type !== "stdio") throw new Error(f + ": bad name/type");
+              if (m.path !== expectedPath) throw new Error(f + ": path " + m.path + " != " + expectedPath);
+              if (JSON.stringify(m.allowed_origins) !== JSON.stringify(["chrome-extension://oladakapegoiphmpicedkgnieanibbbe/"])) throw new Error(f + ": allowed_origins " + JSON.stringify(m.allowed_origins));
+              console.log("OK " + f + " -> " + m.path);
+            }
+          ' "$GITHUB_WORKSPACE/native-host/host.js"
+          test -x "$GITHUB_WORKSPACE/native-host/host.js"

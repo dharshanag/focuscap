@@ -30,9 +30,8 @@ already default to the right ID.
 
 - **macOS:** `./install-mac.sh`
 - **Ubuntu/Linux:** `./install-linux.sh`
-- **Windows:** `.\install-windows.ps1` (PowerShell) — currently registers
-  **stable Chrome only** and has not yet been run on a real Windows machine;
-  see GitHub issue #14.
+- **Windows:** `.\install-windows.ps1` (Windows PowerShell 5.1 or
+  PowerShell 7)
 
 (If you ever regenerate your own `"key"` in manifest.json, your extension ID
 will change too — pass it explicitly, e.g. `./install-mac.sh <EXTENSION_ID>`
@@ -42,6 +41,27 @@ The macOS/Linux scripts register into every Chrome channel's directory
 (Stable, Beta, Canary/Unstable, Chrome for Testing, Chromium) — each channel
 reads its own, and a manifest under only `google-chrome`/`Chrome` fails on the
 others with "Specified native messaging host not found".
+
+The Windows script does the same through the registry: it writes the
+manifest's path as the `(default)` value of
+`<key>\NativeMessagingHosts\com.focuscap.host` under each of
+`HKCU:\Software\Google\Chrome`, `Google\Chrome Beta`, `Google\Chrome SxS`
+(Canary), `Google\Chrome for Testing`, `Chromium`, `Microsoft\Edge`,
+`Microsoft\Edge Beta`, `Microsoft\Edge Dev` and `Microsoft\Edge SxS`
+(Canary), so Edge users are covered too. Keys for browsers that aren't
+installed are harmless. It refuses to run (non-zero exit, clear message) if
+`node` isn't on `PATH`, since `host.bat` needs it. Windows looks the host up
+in the registry globally, so there is no `--user-data-dir` caveat there.
+
+CI (`.github/workflows/test.yml`) executes `install-windows.ps1` on
+`windows-latest` (under both PowerShell 5.1 and 7, checking the manifest
+and all nine registry keys, plus `host.bat` answering a real wire frame from
+`cmd`) and `install-mac.sh` on `macos-latest` (checking all five
+`~/Library/Application Support` manifests), alongside the Linux suite. The
+one thing CI can't do is open a browser: confirming
+`chrome.runtime.connectNative("com.focuscap.host")` succeeds in a real
+Chrome/Edge on Windows and macOS is still a manual check (GitHub issue #14,
+TC3/TC4/TC7).
 
 **Linux + custom `--user-data-dir`:** on Linux, Chrome resolves the
 user-level `NativeMessagingHosts` directory relative to the *active
@@ -59,9 +79,11 @@ right per-OS location (see each script) pointing at `host.js`
 directly there) and restricts `allowed_origins` to the extension ID. The
 macOS/Linux scripts build that manifest with `node` (`JSON.stringify` over
 the template object) rather than `sed`, so a checkout path or extension ID
-containing `#`, `&` or `\` is written literally. On
-macOS/Windows restart Chrome afterwards; on Linux the manifest is looked up
-on each `connectNative()` call, so no restart is needed.
+containing `#`, `&` or `\` is written literally; the Windows script does the
+same with `ConvertFrom-Json`/`ConvertTo-Json` (so every backslash in the
+path is escaped) and writes it as UTF-8 without a BOM, which Chrome would
+reject. On macOS/Windows restart Chrome afterwards; on Linux the manifest is
+looked up on each `connectNative()` call, so no restart is needed.
 
 ## Status
 
