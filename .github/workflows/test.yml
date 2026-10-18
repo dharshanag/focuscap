@@ -139,8 +139,13 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $weird = Join-Path $env:RUNNER_TEMP "fc [weird] #&'x"
-          New-Item -ItemType Directory -LiteralPath $weird -Force | Out-Null
-          Copy-Item -LiteralPath ".\native-host" -Destination (Join-Path $weird "native-host") -Recurse -Force
+          # .NET calls: 5.1's New-Item has no -LiteralPath and Copy-Item treats
+          # [ ] in -Destination as wildcards. native-host is a flat directory.
+          $dest = Join-Path $weird "native-host"
+          [System.IO.Directory]::CreateDirectory($dest) | Out-Null
+          foreach ($f in Get-ChildItem -LiteralPath ".\native-host" -File) {
+            [System.IO.File]::Copy($f.FullName, (Join-Path $dest $f.Name), $true)
+          }
           $script = Join-Path $weird "native-host\install-windows.ps1"
           powershell -NoProfile -ExecutionPolicy Bypass -File $script
           Write-Host "exit code: $LASTEXITCODE"
