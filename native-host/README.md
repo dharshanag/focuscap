@@ -81,9 +81,11 @@ macOS/Linux scripts build that manifest with `node` (`JSON.stringify` over
 the template object) rather than `sed`, so a checkout path or extension ID
 containing `#`, `&` or `\` is written literally; the Windows script does the
 same with `ConvertFrom-Json`/`ConvertTo-Json` (so every backslash in the
-path is escaped) and writes it as UTF-8 without a BOM, which Chrome would
-reject. On macOS/Windows restart Chrome afterwards; on Linux the manifest is
-looked up on each `connectNative()` call, so no restart is needed.
+path is escaped) and writes it as UTF-8 without a BOM (Windows PowerShell
+5.1's `Set-Content -Encoding UTF8` would add one; not every JSON parser
+accepts it). On macOS/Windows restart Chrome afterwards; on Linux the
+manifest is looked up on each `connectNative()` call, so no restart is
+needed.
 
 ## Status
 

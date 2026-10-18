@@ -67,6 +67,9 @@ jobs:
           if (-not (Test-Path -LiteralPath $m.path)) { throw "path does not exist: $($m.path)" }
           $origins = @($m.allowed_origins)
           if ($origins.Count -ne 1 -or $origins[0] -ne "chrome-extension://oladakapegoiphmpicedkgnieanibbbe/") { throw "allowed_origins: $($origins -join ',')" }
+          # @() would also wrap a bare string, so check the raw JSON really holds an array.
+          $raw = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8
+          if ($raw -notmatch '"allowed_origins":\s*\[') { throw "allowed_origins is not a JSON array" }
 
           $keys = @(
             "HKCU:\Software\Google\Chrome",
@@ -119,12 +122,40 @@ jobs:
           $m = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
           $origins = @($m.allowed_origins)
           if ($origins.Count -ne 1 -or $origins[0] -ne "chrome-extension://abcdefghijklmnopabcdefghijklmnop/") { throw "allowed_origins: $($origins -join ',')" }
+          $raw = Get-Content -LiteralPath $manifestPath -Raw
+          if ($raw -notmatch '"allowed_origins":\s*\[') { throw "allowed_origins is not a JSON array" }
           if (-not $m.path.EndsWith("\native-host\host.bat")) { throw "path: $($m.path)" }
           foreach ($k in "HKCU:\Software\Google\Chrome", "HKCU:\Software\Microsoft\Edge") {
             $value = (Get-ItemProperty -LiteralPath "$k\NativeMessagingHosts\com.focuscap.host")."(default)"
             if ($value -ne $manifestPath) { throw "$k (default) = '$value', expected '$manifestPath'" }
           }
           Write-Host "OK origin overridden, registry unchanged"
+
+      # The bash installers are unit-tested from a path full of shell/sed
+      # metacharacters (test/install-scripts.test.js); give the PowerShell one
+      # the same treatment: spaces, [ ] wildcards, # & and a single quote.
+      - name: install-windows.ps1 from a path with spaces, [ ], # & and a quote (PowerShell 5.1)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $weird = Join-Path $env:RUNNER_TEMP "fc [weird] #&'x"
+          New-Item -ItemType Directory -LiteralPath $weird -Force | Out-Null
+          Copy-Item -LiteralPath ".\native-host" -Destination (Join-Path $weird "native-host") -Recurse -Force
+          $script = Join-Path $weird "native-host\install-windows.ps1"
+          powershell -NoProfile -ExecutionPolicy Bypass -File $script
+          Write-Host "exit code: $LASTEXITCODE"
+          if ($LASTEXITCODE -ne 0) { throw "install-windows.ps1 exited with $LASTEXITCODE from '$weird'" }
+          $manifestPath = Join-Path $weird "native-host\com.focuscap.host.json"
+          $m = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          $expected = Join-Path $weird "native-host\host.bat"
+          if ($m.path -ne $expected) { throw "path: '$($m.path)', expected '$expected'" }
+          if (-not (Test-Path -LiteralPath $m.path)) { throw "path does not exist: $($m.path)" }
+          $value = (Get-ItemProperty -LiteralPath "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.focuscap.host")."(default)"
+          if ($value -ne $manifestPath) { throw "registry (default) = '$value', expected '$manifestPath'" }
+          Write-Host "OK manifest path taken literally: $($m.path)"
+          # Put the plain checkout's registration back for the steps that follow.
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\native-host\install-windows.ps1 | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "re-registering the checkout failed" }
 
       # TC5: host.bat from a plain cmd, the way Chrome launches it, with a
       # real wire frame on stdin (native-host/README.md "Test the host

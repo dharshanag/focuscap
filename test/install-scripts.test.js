@@ -128,6 +128,6 @@ describe("install-windows.ps1 (static check of the source, not executed)", () =>
   it("defaults to the pinned extension ID, stops on errors and refuses to run without node", () => {
     expect(ps1).toContain('[string]$ExtensionId = "oladakapegoiphmpicedkgnieanibbbe"');
     expect(ps1).toContain('$ErrorActionPreference = "Stop"');
-    expect(ps1).toMatch(/Get-Command node/);
+    expect(ps1).toMatch(/Get-Command node\b/);
   });
 });
