@@ -1,0 +1,13 @@
+{
+  "name": "focus-cap-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Real-browser end-to-end harness for the Focus Cap extension and its native messaging host.",
+  "type": "module",
+  "scripts": {
+    "e2e": "node run.mjs"
+  },
+  "dependencies": {
+    "puppeteer-core": "25.12.0"
+  }
+}
