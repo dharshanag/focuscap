@@ -148,8 +148,20 @@ function handleFrame(frame, deps = {}) {
     write(sanitizeStatePatch(JSON.parse(text)));
     return buildReply(null);
   } catch (err) {
-    const detail = err instanceof Error ? err.stack || err.message : String(err);
-    log(`focuscap host: frame failed: ${detail}`);
+    // Rendering the detail must not be able to throw either (an exotic
+    // throwable with a throwing .stack/.message getter or toString would
+    // otherwise escape this catch and take the whole stdio loop down).
+    let detail;
+    try {
+      detail = err instanceof Error ? err.stack || err.message : String(err);
+    } catch (_) {
+      detail = "(unprintable error)";
+    }
+    try {
+      log(`focuscap host: frame failed: ${detail}`);
+    } catch (_) {
+      // a failing logger is never worth a dropped reply
+    }
     return buildReply(err === null || err === undefined ? new Error("unknown error") : err);
   }
 }

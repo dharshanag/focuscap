@@ -200,6 +200,20 @@ describe("options.js", () => {
       expect(getStore().focusSites).toHaveLength(1);
     });
 
+    // Issue #18 TC1, Dashboard half: reserved property names must never
+    // become a site (a "__proto__" domain would index Object.prototype).
+    it("the Dashboard add form refuses reserved property names but accepts look-alike real domains", async () => {
+      const { opts, getStore } = await loadOptions({ ...onboarded, budgetSeconds: 3600 });
+      for (const bad of ["__proto__", "constructor", "prototype", "https://__proto__/x"]) {
+        el("domainInput").value = bad;
+        await opts.addSite({ preventDefault() {} });
+        expect(getStore().focusSites ?? []).toHaveLength(0);
+      }
+      el("domainInput").value = "proto.example.com";
+      await opts.addSite({ preventDefault() {} });
+      expect(getStore().focusSites.map((s) => s.domain)).toEqual(["proto.example.com"]);
+    });
+
     it("removeSite() refuses while locked or in the last 5 minutes of the site's budget, allows otherwise", async () => {
       const { opts, getStore } = await loadOptions({
         ...onboarded,

@@ -156,6 +156,24 @@ describe("native-host/host.js", () => {
       expect(log.mock.calls[0][0]).toContain("string-throw");
     });
 
+    // QA of #9: an Error whose .stack/.message getters throw used to escape
+    // the catch and take the whole stdio loop down (host exit 1).
+    it("a throwable whose stack/message getters throw, or a throwing logger, still yields the generic reply", async () => {
+      const host = await import("../native-host/host.js");
+      const evil = new Error("x");
+      Object.defineProperty(evil, "stack", { get() { throw new Error("getter boom"); } });
+      Object.defineProperty(evil, "message", { get() { throw new Error("getter boom"); } });
+      const frame = host.extractFrames(host.encodeFrame({ locked: true })).frames[0];
+      const log = vi.fn();
+      const reply = decode(host, host.handleFrame(frame, { writeState: () => { throw evil; }, log }));
+      expect(reply).toMatchObject({ ok: false, error: "internal error" });
+      expect(log.mock.calls[0][0]).toContain("(unprintable error)");
+
+      const throwingLog = () => { throw new Error("logger down"); };
+      const reply2 = decode(host, host.handleFrame(frame, { writeState: () => { throw new Error("boom"); }, log: throwingLog }));
+      expect(reply2).toMatchObject({ ok: false, error: "internal error" });
+    });
+
     it("a malformed JSON frame gets the generic error (no SyntaxError echo) and the next valid frame on the same loop gets ok: true", async () => {
       const host = await import("../native-host/host.js");
       const writeState = vi.fn();

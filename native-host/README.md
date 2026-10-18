@@ -90,9 +90,12 @@ wins; a reader that catches a half-written file falls back to defaults), so
 nothing is permanently corrupted — but "the" lock state is only meaningful
 while one profile is running.
 
-`focusSites` is whitelisted entry by entry to
+`focusSites` is reduced entry by entry to
 `{ domain, budgetSeconds, lockoutSeconds, rules }` with the same defaults
-`shared.js`'s `normalizeSite()` applies (nothing reads it from the file yet).
+`shared.js`'s `normalizeSite()` applies; non-object entries and entries
+without a domain are dropped. `rules` is kept as an array of plain objects
+but its fields are not individually filtered (nothing reads `focusSites`
+from the file yet).
 
 ## Test the host manually, without Chrome at all
 
