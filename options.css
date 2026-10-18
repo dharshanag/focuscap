@@ -5,8 +5,8 @@
   --panel-2: #262637;
   --text: #e7e7f0;
   --muted: #9a9ab0;
-  --accent: #a78bfa;
-  --accent-dim: #6d5bb5;
+  --accent: #60a5fa;
+  --accent-dim: #2563eb;
   --danger: #f87171;
   --green: #34d399;
   --amber: #fbbf24;
@@ -20,8 +20,8 @@
   --panel-2: #ececf1;
   --text: #1b1b26;
   --muted: #63637a;
-  --accent: #7c3aed;
-  --accent-dim: #8b5cf6;
+  --accent: #1d4ed8;
+  --accent-dim: #2563eb;
   --danger: #dc2626;
   --green: #059669;
   --amber: #b45309;
@@ -95,7 +95,7 @@ input:disabled { opacity: 0.45; cursor: not-allowed; }
 input[type="time"] { font-variant-numeric: tabular-nums; }
 
 /* onboarding */
-.onboard { border-color: rgba(167,139,250,0.4); }
+.onboard { border-color: rgba(96,165,250,0.4); }
 .onboard-step { margin-top: 14px; }
 .step-label { font-weight: 600; margin-bottom: 8px; }
 .preset-grid { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -104,7 +104,7 @@ input[type="time"] { font-variant-numeric: tabular-nums; }
   background: var(--panel-2); border: 1px solid var(--edge);
   border-radius: 999px; padding: 6px 12px; cursor: pointer; user-select: none;
 }
-.preset.on { background: rgba(167,139,250,0.22); border-color: var(--accent); }
+.preset.on { background: rgba(96,165,250,0.22); border-color: var(--accent); }
 .onboard-actions { margin-top: 18px; display: flex; gap: 10px; align-items: center; }
 
 /* site list */
@@ -155,7 +155,7 @@ input[type="time"] { font-variant-numeric: tabular-nums; }
   background: var(--panel-2); border: 1px solid var(--edge);
   color: var(--muted); font-weight: 600; font-size: 12px;
 }
-.day-btn.on { background: rgba(167,139,250,0.22); border-color: var(--accent); color: var(--text); }
+.day-btn.on { background: rgba(96,165,250,0.22); border-color: var(--accent); color: var(--text); }
 .day-btn.mini { width: 30px; height: 28px; font-size: 11px; }
 
 .window-list, .blackout-list { list-style: none; margin: 0 0 8px; padding: 0; }
@@ -177,3 +177,24 @@ input[type="time"] { font-variant-numeric: tabular-nums; }
 .field-row.disabled { opacity: 0.45; pointer-events: none; }
 .save-row { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
 .saved-msg { color: var(--green); font-size: 13px; font-weight: 600; }
+
+/* collapsible Advanced section */
+.advanced-summary {
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 500;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.advanced-summary::-webkit-details-marker { display: none; }
+.advanced-summary::after {
+  content: "\203A";
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  transition: transform 0.2s ease;
+}
+.advanced-card[open] .advanced-summary::after { transform: rotate(90deg); }
+.advanced-body { margin-top: 14px; }
