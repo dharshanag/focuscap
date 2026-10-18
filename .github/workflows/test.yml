@@ -55,10 +55,14 @@ jobs:
           $manifestPath = (Resolve-Path ".\native-host\com.focuscap.host.json").Path
           $bytes = [System.IO.File]::ReadAllBytes($manifestPath)
           if ($bytes[0] -eq 0xEF) { throw "manifest starts with a UTF-8 BOM" }
-          Get-Content -LiteralPath $manifestPath -Raw | Write-Host
-          $m = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | Write-Host
+          $m = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          $t = Get-Content -LiteralPath ".\native-host\com.focuscap.host.json.template" -Raw -Encoding UTF8 | ConvertFrom-Json
           if ($m.name -ne "com.focuscap.host") { throw "name: $($m.name)" }
           if ($m.type -ne "stdio") { throw "type: $($m.type)" }
+          # The template's description holds an em dash: it must survive the
+          # UTF-8 read/ConvertTo-Json/WriteAllText round trip byte-exactly.
+          if ($m.description -ne $t.description) { throw "description changed: $($m.description)" }
           if (-not $m.path.EndsWith("\native-host\host.bat")) { throw "path: $($m.path)" }
           if (-not (Test-Path -LiteralPath $m.path)) { throw "path does not exist: $($m.path)" }
           $origins = @($m.allowed_origins)
@@ -94,6 +98,9 @@ jobs:
           Write-Host "without node on PATH -> exit $guardCode, output: $guardOutput"
           if ($guardCode -eq 0) { throw "install-windows.ps1 should fail when node is not on PATH" }
           if ($guardOutput -notmatch "'node' was not found on PATH") { throw "missing the node-not-found message" }
+          # That exit 1 was the point; don't let the step inherit it (the
+          # powershell shell wrapper ends with `exit $LASTEXITCODE`).
+          $global:LASTEXITCODE = 0
 
       # TC6 under PowerShell 7 (the `pwsh` shell): the override changes the
       # origin and nothing else; the registry values still point at the same
