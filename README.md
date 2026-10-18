@@ -212,20 +212,25 @@ planned. See `companion/README.md` and `native-host/README.md`.
 Tracked as GitHub issues so they aren't lost: the companion pill's
 click-through / never-takes-focus behaviour is asserted from Electron flags,
 not observed (#13, closed — the heartbeat path and the pill's rendered text
-are now verified); the native-host install scripts now run in CI on
-Linux, Windows and macOS (`install-windows.ps1` registers every Chrome
-channel, Chromium and Edge), but `connectNative` against the registered
-host has still only been confirmed in a real browser on Linux, not on
-Windows or macOS (#14); "unblocks at" times can be off by
-an hour across DST or wrong for adjacent windows (#15); in a packed/store
-build Chrome (120+; 1 min before) clamps `chrome.alarms` to a 30-second
-minimum, so a cool-down shorter than 30 s is still enforced on time by the
-extension but the
-companion pill may be told up to 30 s late — the service worker also fires a
-timer at the real unlock time while it is still alive, so this only shows
-after a worker shutdown — and the editor's cool-down field is whole minutes
-(minimum 1), so it can only be reached by writing `lockoutSeconds` to
-storage directly (#17).
+are now verified); the native-host install scripts run in CI on Linux,
+Windows and macOS (`install-windows.ps1` registers every Chrome channel,
+Chromium and Edge), and `connectNative` against the registered host has
+been confirmed in real browsers through the `e2e/` harness — Chrome, Chrome
+Beta and Edge on Windows Server 2022, Chrome on macOS 15 (with the
+user-data-dir manifest, see `native-host/README.md`) and Chrome on Ubuntu
+24.04 — so what remains unverified in a browser is only the Chrome
+Canary/Chromium/Edge Beta/Dev channel registry keys (#14); "unblocks at"
+times can be off by an hour across DST or wrong for adjacent windows (#15);
+Chrome documents a 30-second minimum for `chrome.alarms` in non-unpacked
+builds (120+; 1 min before), but it was NOT observed for a policy-installed
+CRX on Chrome 155 — the unlock alarm fired at the requested 20 s, exactly
+like unpacked — and a Web Store install is untested; the service worker
+still fires a timer at the real unlock time for a sub-30 s cool-down as
+insurance, so even if a store build does clamp, the cool-down is enforced on
+time by the extension and the companion pill may be told up to 30 s late
+only after a worker shutdown — and the editor's cool-down field is whole
+minutes (minimum 1), so such a cool-down can only be reached by writing
+`lockoutSeconds` to storage directly (#17).
 Not yet filed: a scheduled blackout or enforcement-window *start* doesn't
 proactively redirect already-open tabs or push a companion snapshot — the
 next heartbeat or navigation handles it; likewise, when a site becomes free

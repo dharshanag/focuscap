@@ -12,7 +12,9 @@
 // is always the one you point --chrome at.
 
 import { parseArgs } from "node:util";
+import childProcess from "node:child_process";
 import fs from "node:fs";
+import readline from "node:readline";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
@@ -478,7 +480,7 @@ const checks = [
   },
   {
     id: "unlock-reported",
-    title: `state.json flips to unlocked within lockout+45 s (unpacked ≈ ${cfg.lockoutSeconds} s, packed ≥ 30 s)`,
+    title: `state.json flips to unlocked within lockout+45 s (≈ ${cfg.lockoutSeconds} s measured for unpacked and policy-installed builds; a 30 s store clamp would still pass)`,
     needs: ["host-wrote-state"],
     async run() {
       const deadline = ctx.tLock + (cfg.lockoutSeconds + 45) * 1000;
@@ -681,6 +683,13 @@ const checks = [
 
 // ---- main ------------------------------------------------------------------
 
+// Start-up failures Chrome only reports on stderr. In --remote-debugging-pipe
+// mode puppeteer never reads that stream: it waits on the pipe until its
+// protocol timeout (~6 min) and then blames "The browser is already running
+// for <udd>" — seen on Windows when %USERPROFILE%\AppData\Local was missing
+// ("DevTools remote debugging requires a non-default data directory").
+const FATAL_CHROME_STDERR = /requires a non-default data directory|already running|Failed to create a ProcessSingleton|Missing X server|cannot be run as root/i;
+
 async function launchBrowser() {
   const args = ["--no-first-run", "--no-default-browser-check", "--disable-sync"];
   if (cfg.noSandbox) args.push("--no-sandbox", "--disable-setuid-sandbox");
@@ -706,12 +715,61 @@ async function launchBrowser() {
     // which two of puppeteer's default flags switch off.
     launch.ignoreDefaultArgs = ["--disable-background-networking", "--disable-component-update"];
   }
-  return puppeteer.launch(launch);
+
+  // puppeteer does not expose the Chrome child while launch() is pending, so
+  // tap child_process.spawn for the one spawn of --chrome: its stderr lines
+  // and exit make the launch fail fast with the real reason.
+  const chrome = { lines: [], child: null };
+  let failFast;
+  const fatal = new Promise((_, reject) => {
+    failFast = reject;
+  });
+  const realSpawn = childProcess.spawn;
+  childProcess.spawn = function spawnTap(file, spawnArgs, options) {
+    const child = realSpawn.call(this, file, spawnArgs, options);
+    if (path.resolve(String(file)) !== cfg.chrome) return child;
+    childProcess.spawn = realSpawn;
+    chrome.child = child;
+    if (child.stderr) {
+      readline.createInterface({ input: child.stderr }).on("line", (line) => {
+        chrome.lines.push(line);
+        if (FATAL_CHROME_STDERR.test(line)) failFast(new Error(`Chrome failed to start: ${line.trim()}`));
+      });
+    }
+    child.once("exit", (code, signal) => failFast(new Error(`Chrome exited during launch (code ${code}, signal ${signal})`)));
+    return child;
+  };
+  const launching = puppeteer.launch(launch);
+  launching.catch(() => {}); // a late rejection after fail-fast must not crash the harness
+  try {
+    return await Promise.race([withTimeout(launching, cfg.timeoutMs, "browser launch"), fatal]);
+  } catch (e) {
+    if (chrome.child && chrome.child.exitCode === null) {
+      // puppeteer spawns Chrome detached (its own process group) on POSIX, so
+      // kill the group: Chrome's helpers must not outlive the harness.
+      try {
+        if (process.platform === "win32") chrome.child.kill("SIGKILL");
+        else process.kill(-chrome.child.pid, "SIGKILL");
+      } catch (_) {
+        chrome.child.kill("SIGKILL");
+      }
+    }
+    const tail = chrome.lines.filter((l) => l.trim()).slice(-8);
+    throw new Error(`${e && e.message ? e.message : e}${tail.length ? `\nChrome stderr (last ${tail.length} line(s)):\n  ${tail.join("\n  ")}` : ""}`);
+  } finally {
+    childProcess.spawn = realSpawn;
+  }
 }
 
 async function main() {
   const startedAt = new Date();
   fs.mkdirSync(cfg.home, { recursive: true });
+  if (process.platform === "win32") {
+    // Chrome resolves %LOCALAPPDATA% from the USERPROFILE it is handed; when
+    // that AppData\Local does not exist it refuses --remote-debugging-pipe
+    // ("DevTools remote debugging requires a non-default data directory").
+    fs.mkdirSync(path.join(cfg.home, "AppData", "Local"), { recursive: true });
+  }
   fs.mkdirSync(cfg.userDataDir, { recursive: true });
   fs.mkdirSync(path.dirname(cfg.out), { recursive: true });
 
@@ -805,15 +863,23 @@ async function main() {
   fs.writeFileSync(cfg.out, JSON.stringify(report, null, 2) + "\n");
   log(`${report.pass ? "PASS" : "FAIL"}: ${report.summary.passed} passed, ${report.summary.failed} failed, ${report.summary.skipped} skipped` + (ctx.unlockDelayMs !== null ? `; unlock reported ${ctx.unlockDelayMs} ms after the lock (lockout ${cfg.lockoutSeconds * 1000} ms)` : "") + ` → ${cfg.out}`);
   process.exitCode = report.pass ? 0 : 1;
+  if (report.error) {
+    // After a failed launch puppeteer may still hold timers; don't let them
+    // keep the harness alive once the report is written (unref: a clean
+    // drain exits on its own first).
+    setTimeout(() => process.exit(process.exitCode), 2000).unref();
+  }
 }
 
 function hostManifestLocation() {
-  const linux = path.join(cfg.userDataDir, "NativeMessagingHosts", `${HOST_NAME}.json`);
+  const inUdd = path.join(cfg.userDataDir, "NativeMessagingHosts", `${HOST_NAME}.json`);
   switch (process.platform) {
     case "linux":
-      return { expected: linux, present: fs.existsSync(linux), note: "Linux Chrome resolves user-level hosts relative to --user-data-dir" };
+      return { expected: inUdd, present: fs.existsSync(inUdd), note: "Linux Chrome resolves user-level hosts relative to --user-data-dir" };
     case "darwin":
-      return { expected: `~/Library/Application Support/<channel>/NativeMessagingHosts/${HOST_NAME}.json`, userDataDir: cfg.userDataDir, note: "run native-host/install-mac.sh as the user launching Chrome" };
+      // Verified on Chrome 155: ~/Library/Application Support/<channel> only
+      // works because it is the default user-data-dir.
+      return { expected: inUdd, present: fs.existsSync(inUdd), note: "macOS Chrome, like Linux, resolves user-level hosts relative to --user-data-dir: run native-host/install-mac.sh <ID> <user-data-dir>" };
     case "win32":
       return { expected: `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`, userDataDir: cfg.userDataDir, note: "run native-host/install-windows.ps1 as the user launching Chrome" };
     default:

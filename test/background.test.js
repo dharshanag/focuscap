@@ -286,6 +286,57 @@ describe("background.js", () => {
         { locked: false, remainingMs: 42 }
       ]);
     });
+
+    // Chrome logs "Unchecked runtime.lastError: Specified native messaging
+    // host not found." at ERROR level for every disconnect whose listener
+    // never reads chrome.runtime.lastError — one per notifyNativeHost() call
+    // when the host isn't registered (11 per 30 s run in the e2e harness).
+    it("reads chrome.runtime.lastError when the port disconnects, logs at most one debug line and reconnects on the next notify", async () => {
+      const { bg, chrome } = await loadBackground({});
+      const disconnectListeners = [];
+      let connects = 0;
+      chrome.runtime.connectNative = () => {
+        connects += 1;
+        return { postMessage: () => {}, onDisconnect: { addListener: (fn) => disconnectListeners.push(fn) } };
+      };
+      let lastErrorReads = 0;
+      Object.defineProperty(chrome.runtime, "lastError", {
+        configurable: true,
+        get() {
+          lastErrorReads += 1;
+          return { message: "Specified native messaging host not found." };
+        }
+      });
+      const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      bg.notifyNativeHost({ locked: true });
+      expect(connects).toBe(1);
+      expect(disconnectListeners).toHaveLength(1);
+      expect(lastErrorReads).toBe(0);
+
+      disconnectListeners[0]();
+      expect(lastErrorReads).toBe(1);
+      expect(error).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+      expect(debug).toHaveBeenCalledTimes(1);
+      expect(debug.mock.calls[0][0]).toMatch(/Specified native messaging host not found/);
+
+      // The port was dropped, so the next notify connects afresh; a second
+      // disconnect still reads lastError but doesn't log again.
+      bg.notifyNativeHost({ locked: false });
+      expect(connects).toBe(2);
+      expect(disconnectListeners).toHaveLength(2);
+      disconnectListeners[1]();
+      expect(lastErrorReads).toBe(2);
+      expect(debug).toHaveBeenCalledTimes(1);
+      expect(error).not.toHaveBeenCalled();
+
+      debug.mockRestore();
+      error.mockRestore();
+      warn.mockRestore();
+    });
   });
 
   // --- Issue #12 phase 1 / #16: the host's replies carry a protocolVersion ---

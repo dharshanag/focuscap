@@ -59,4 +59,7 @@ for TARGET_DIR in "${TARGET_DIRS[@]}"; do
   echo "Registered: $TARGET_DIR/com.focuscap.host.json"
 done
 
-echo "Restart your browser for it to take effect."
+# No restart needed: on Linux, Chrome looks the manifest up on every
+# connectNative() call (verified: a re-registration in a running profile is
+# picked up immediately).
+echo "Done. No browser restart is needed on Linux: the manifest is looked up on each connectNative() call."

@@ -37,19 +37,26 @@ already default to the right ID.
 will change too — pass it explicitly, e.g. `./install-mac.sh <EXTENSION_ID>`
 or `.\install-windows.ps1 -ExtensionId <EXTENSION_ID>`.)
 
-The macOS/Linux scripts register into every Chrome channel's directory
-(Stable, Beta, Canary/Unstable, Chrome for Testing, Chromium) — each channel
-reads its own, and a manifest under only `google-chrome`/`Chrome` fails on the
-others with "Specified native messaging host not found".
+The macOS/Linux scripts register into every Chrome channel's default
+profile directory (Stable, Beta, Canary/Unstable, Chrome for Testing,
+Chromium) — each channel keeps its own, and a manifest under only
+`google-chrome`/`Chrome` fails on the others with "Specified native messaging
+host not found".
 
-The Windows script does the same through the registry: it writes the
+The Windows script registers through the registry instead: it writes the
 manifest's path as the `(default)` value of
 `<key>\NativeMessagingHosts\com.focuscap.host` under each of
 `HKCU:\Software\Google\Chrome`, `Google\Chrome Beta`, `Google\Chrome SxS`
 (Canary), `Google\Chrome for Testing`, `Chromium`, `Microsoft\Edge`,
 `Microsoft\Edge Beta`, `Microsoft\Edge Dev` and `Microsoft\Edge SxS`
-(Canary), so Edge users are covered too. Keys for browsers that aren't
-installed are harmless. It refuses to run (non-zero exit, clear message) if
+(Canary). Measured on Windows Server 2022 (each browser tested with exactly
+one key present): Chrome 155 stable **and** Chrome Beta 157 both read only
+`Software\Google\Chrome` (HKCU or HKLM) — the `Google\Chrome Beta` key is
+not consulted by either; Edge 155 reads `Software\Microsoft\Edge`,
+`Software\Chromium` and `Software\Google\Chrome`. So a manifest under
+`Google\Chrome` alone would already cover all three; the other keys are
+harmless and kept for the channels nobody tested (Canary, Chromium, Edge
+Beta/Dev/Canary). The script refuses to run (non-zero exit, clear message) if
 `node` isn't on `PATH`, since `host.bat` needs it. Windows looks the host up
 in the registry globally, so there is no `--user-data-dir` caveat there.
 
@@ -57,21 +64,30 @@ CI (`.github/workflows/test.yml`) executes `install-windows.ps1` on
 `windows-latest` (under both PowerShell 5.1 and 7, checking the manifest
 and all nine registry keys, plus `host.bat` answering a real wire frame from
 `cmd`) and `install-mac.sh` on `macos-latest` (checking all five
-`~/Library/Application Support` manifests), alongside the Linux suite. The
-one thing CI can't do is open a browser: confirming
-`chrome.runtime.connectNative("com.focuscap.host")` succeeds in a real
-Chrome/Edge on Windows and macOS is still a manual check (GitHub issue #14,
-TC3/TC4/TC7).
+`~/Library/Application Support` manifests), alongside the Linux suite. CI
+can't open a browser, but `chrome.runtime.connectNative("com.focuscap.host")`
+has been confirmed against these registrations in real browsers through the
+`e2e/` harness: Chrome, Chrome Beta and Edge on Windows Server 2022, Chrome
+on macOS 15 (with the user-data-dir manifest, see below) and Chrome on
+Ubuntu 24.04 (GitHub issue #14, TC3/TC4/TC7). Only the Chrome
+Canary/Chromium/Edge Beta/Dev channel keys remain unverified in a browser.
 
-**Linux + custom `--user-data-dir`:** on Linux, Chrome resolves the
-user-level `NativeMessagingHosts` directory relative to the *active
-user-data-dir*, not a fixed path. The defaults above cover Chrome's default
-profile location only. If you launch Chrome with a custom `--user-data-dir`
-(browser-automation tools like `agent-browser --profile <dir>` do this), pass
-that directory as the second argument, e.g.
-`./install-linux.sh oladakapegoiphmpicedkgnieanibbbe ~/.my-chrome-profile`
-(or set `CHROME_USER_DATA_DIR`). No browser restart is needed on Linux — the
-lookup happens on each `connectNative()` call.
+**Linux/macOS + custom `--user-data-dir`:** on Linux *and* macOS, Chrome
+resolves the user-level `NativeMessagingHosts` directory relative to the
+*active user-data-dir*, not a fixed path. The defaults above cover each
+channel's default profile location only (on macOS, `~/Library/Application
+Support/Google/Chrome` works purely because it *is* the default
+user-data-dir; verified on Chrome 155, which even creates an empty
+`<user-data-dir>/NativeMessagingHosts` on first launch). If you launch Chrome
+with a custom `--user-data-dir` (browser-automation tools like
+`agent-browser --profile <dir>` do this), pass that directory as the second
+argument, e.g.
+`./install-linux.sh oladakapegoiphmpicedkgnieanibbbe ~/.my-chrome-profile` or
+`./install-mac.sh oladakapegoiphmpicedkgnieanibbbe ~/.my-chrome-profile`
+(or set `CHROME_USER_DATA_DIR`). Windows uses the registry, so it has no
+equivalent. No browser restart is needed on Linux — the lookup happens on
+each `connectNative()` call; on macOS and Windows restart a browser that was
+already running.
 
 Each writes a `com.focuscap.host.json` native messaging host manifest to the
 right per-OS location (see each script) pointing at `host.js`
@@ -83,9 +99,10 @@ containing `#`, `&` or `\` is written literally; the Windows script does the
 same with `ConvertFrom-Json`/`ConvertTo-Json` (so every backslash in the
 path is escaped) and writes it as UTF-8 without a BOM (Windows PowerShell
 5.1's `Set-Content -Encoding UTF8` would add one; not every JSON parser
-accepts it). On macOS/Windows restart Chrome afterwards; on Linux the
-manifest is looked up on each `connectNative()` call, so no restart is
-needed.
+accepts it). On macOS/Windows restart an already-running Chrome afterwards;
+on Linux the manifest is looked up on each `connectNative()` call, so no
+restart is needed (confirmed: a re-registration in a running profile is
+picked up immediately).
 
 ## Status
 

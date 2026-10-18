@@ -21,11 +21,11 @@ function runInScratch(script, extraEnv = {}, args = []) {
   cpSync(join(root, "native-host"), join(weird, "native-host"), { recursive: true });
   const home = join(scratch, "home");
   mkdirSync(home);
-  execFileSync("bash", [join(weird, "native-host", script), ...args], {
+  const stdout = execFileSync("bash", [join(weird, "native-host", script), ...args], {
     env: { ...process.env, HOME: home, ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"]
-  });
-  return { scratch, weird, home };
+  }).toString("utf8");
+  return { scratch, weird, home, stdout };
 }
 
 function* manifestsUnder(dir) {
@@ -41,8 +41,12 @@ describe.skipIf(skip)("native-host install scripts", () => {
 
   it("install-linux.sh writes a parseable manifest with the path and ID taken literally, into every channel dir and the user-data-dir", () => {
     const udd = mkdtempSync(join(tmpdir(), "fc-udd-"));
-    const { scratch, weird, home } = runInScratch("install-linux.sh", { CHROME_USER_DATA_DIR: udd }, [ID]);
+    const { scratch, weird, home, stdout } = runInScratch("install-linux.sh", { CHROME_USER_DATA_DIR: udd }, [ID]);
     try {
+      // Linux looks the manifest up on every connectNative() call, so the
+      // script must not tell the user to restart (native-host/README.md).
+      expect(stdout).not.toMatch(/Restart your browser/);
+      expect(stdout).toMatch(/No browser restart is needed on Linux/);
       const files = [...manifestsUnder(home), ...manifestsUnder(udd)];
       // 5 Chrome/Chromium channel dirs under ~/.config + the custom user-data-dir.
       expect(files).toHaveLength(6);
@@ -62,16 +66,35 @@ describe.skipIf(skip)("native-host install scripts", () => {
     }
   });
 
-  it("install-mac.sh writes the same manifest into every macOS channel dir", () => {
-    const { scratch, weird, home } = runInScratch("install-mac.sh", {}, [ID]);
+  it("install-mac.sh writes the same manifest into every macOS channel dir and the user-data-dir", () => {
+    // macOS resolves user-level host manifests relative to the active
+    // --user-data-dir exactly like Linux (Chrome 155), so the second
+    // argument is mirrored from install-linux.sh.
+    const udd = mkdtempSync(join(tmpdir(), "fc-udd-"));
+    const { scratch, weird, home, stdout } = runInScratch("install-mac.sh", {}, [ID, udd]);
     try {
-      const files = [...manifestsUnder(join(home, "Library"))];
-      expect(files).toHaveLength(5);
+      const files = [...manifestsUnder(join(home, "Library")), ...manifestsUnder(udd)];
+      // 5 channel dirs under ~/Library/Application Support + the custom user-data-dir.
+      expect(files).toHaveLength(6);
       for (const f of files) {
         const m = JSON.parse(readFileSync(f, "utf8"));
+        expect(m.name).toBe("com.focuscap.host");
         expect(m.path).toBe(join(weird, "native-host", "host.js"));
         expect(m.allowed_origins).toEqual([`chrome-extension://${ID}/`]);
       }
+      expect(files.some((f) => f.startsWith(udd))).toBe(true);
+      // An already-running Chrome on macOS does need a restart.
+      expect(stdout).toMatch(/Restart Chrome/);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+      rmSync(udd, { recursive: true, force: true });
+    }
+  });
+
+  it("install-mac.sh without a USER_DATA_DIR still writes only the five channel manifests", () => {
+    const { scratch, home } = runInScratch("install-mac.sh", {}, [ID]);
+    try {
+      expect([...manifestsUnder(join(home, "Library"))]).toHaveLength(5);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }

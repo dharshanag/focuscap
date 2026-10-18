@@ -434,8 +434,9 @@ const BLOCK_PAGE = "time-is-up.html";
 // Best-effort bridge to the desktop companion app (see native-host/ and
 // companion/). Entirely optional: if the native host isn't installed or
 // registered, connectNative either throws synchronously or the port
-// disconnects immediately — either way we silently do nothing, since the
-// extension must keep working with zero setup beyond "load unpacked".
+// disconnects immediately — either way we do nothing beyond reading
+// chrome.runtime.lastError (see getNativePort), since the extension must
+// keep working with zero setup beyond "load unpacked".
 // The wire-protocol version this build expects the native host to reply
 // with (native-host/host.js PROTOCOL_VERSION). A mismatch — or a reply
 // from a host too old to send one — is only warned about for now (GitHub
@@ -444,12 +445,26 @@ const BLOCK_PAGE = "time-is-up.html";
 const NATIVE_PROTOCOL_VERSION = 1;
 
 let nativePort = null;
+// Whether the "host unavailable" debug line has been written this worker
+// life: without the host every notifyNativeHost() reconnects and disconnects
+// again, and one line is enough.
+let nativeDisconnectLogged = false;
 function getNativePort() {
   if (nativePort) return nativePort;
   if (typeof chrome.runtime.connectNative !== "function") return null;
   try {
     nativePort = chrome.runtime.connectNative("com.focuscap.host");
     nativePort.onDisconnect.addListener(() => {
+      // Reading lastError here is what marks the disconnect reason as
+      // handled: without it Chrome logs "Unchecked runtime.lastError:
+      // Specified native messaging host not found." at error level on every
+      // attempt (11 times per 30 s run in the e2e harness). The host being
+      // absent is expected, so at most a debug line, never console.error.
+      const err = chrome.runtime.lastError;
+      if (err && !nativeDisconnectLogged) {
+        nativeDisconnectLogged = true;
+        console.debug(`Focus Cap: native host unavailable (${err.message || "disconnected"}); the companion bridge is optional.`);
+      }
       nativePort = null;
     });
     watchNativeProtocol(nativePort);

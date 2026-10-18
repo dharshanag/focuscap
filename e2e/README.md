@@ -20,13 +20,13 @@ ignored (Chrome 137+).
 
 `protocol-handshake` and everything downstream of it can only pass if the
 browser can find and start `native-host/host.js`. The registration is per OS
-user (and, on Linux, per profile directory):
+user (and, on Linux and macOS, per profile directory):
 
 | OS | Register with | Notes |
 |---|---|---|
 | Linux | `./native-host/install-linux.sh <extension-id> <user-data-dir>` | Chrome on Linux resolves user-level host manifests from `<user-data-dir>/NativeMessagingHosts`, **not** from `~/.config`, so the second argument must be the exact directory you pass as `--user-data-dir`. Run it with the same `HOME` you pass as `--home` if you want its `~/.config/*` copies to land there too. No restart needed. |
-| macOS | `./native-host/install-mac.sh <extension-id>` | Writes to `~/Library/Application Support/{Google/Chrome,…}/NativeMessagingHosts` of the user running the script, which must be the user that launches Chrome. |
-| Windows | `.\native-host\install-windows.ps1 -ExtensionId <extension-id>` | Writes `HKCU\Software\…\NativeMessagingHosts\com.focuscap.host`; run it as the same Windows user that launches Chrome. `node` must be on that user's `PATH` (Chrome starts `host.bat`). |
+| macOS | `./native-host/install-mac.sh <extension-id> <user-data-dir>` | Same rule as Linux (verified on Chrome 155): the `~/Library/Application Support/<channel>/NativeMessagingHosts` copies only work for that channel's *default* profile, so with the harness's fresh `--user-data-dir` the second argument is required — without it the handshake fails with `Specified native messaging host not found`. |
+| Windows | `.\native-host\install-windows.ps1 -ExtensionId <extension-id>` | Writes `HKCU\Software\…\NativeMessagingHosts\com.focuscap.host` (Chrome and Chrome Beta read `Google\Chrome`; Edge reads `Microsoft\Edge`, `Chromium` and `Google\Chrome`); run it as the same Windows user that launches Chrome. `node` must be on that user's `PATH` (Chrome starts `host.bat`). Chrome also needs `<--home>\AppData\Local` to exist or it refuses `--remote-debugging-pipe`; the harness creates it. |
 
 `node` must resolve from the environment Chrome inherits — the harness passes
 its own `process.env` (with `HOME`/`USERPROFILE` overridden) to Chrome, and
@@ -56,7 +56,7 @@ cd e2e && node run.mjs --chrome /usr/bin/google-chrome --no-sandbox \
 macOS:
 
 ```
-./native-host/install-mac.sh
+./native-host/install-mac.sh oladakapegoiphmpicedkgnieanibbbe "$TMPDIR/fc-profile"
 cd e2e && node run.mjs --chrome "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
   --home "$TMPDIR/fc-home" --user-data-dir "$TMPDIR/fc-profile" --out "$TMPDIR/fc-report.json"
 ```
@@ -86,12 +86,26 @@ Options:
 | `--no-sandbox` | off | adds `--no-sandbox` (required when running as root on Linux) |
 | `--headed` | off | show a window (default is headless) |
 | `--skip <ids>` | | comma-separated check ids to skip; dependants are skipped too |
-| `--timeout-ms <n>` | 90000 | per-check cap and browser launch timeout |
+| `--timeout-ms <n>` | 90000 | per-check cap and browser launch timeout; a launch also fails fast, quoting Chrome's stderr, when the browser exits or prints a fatal start-up message (e.g. `requires a non-default data directory`, `already running`) |
 | `--verbose` | off | echo Chrome's own stderr (native messaging failures are logged there) |
 
 `--packed` mode expects the extension to have been force-installed by policy
-(e.g. `ExtensionInstallForcelist` / `ExtensionSettings`) before the run; it
-has not been exercised locally.
+(`ExtensionInstallForcelist` / `ExtensionSettings`) before the run. Two
+things the policy must get right, both measured on Chrome 155:
+
+- The managed policy must also set `"DeveloperToolsAvailability": 1`.
+  Chrome's default hides force-installed extensions from DevTools/CDP, so the
+  extension is installed and enabled but the harness sees no service worker
+  (`extension-loaded` fails with "no service worker … within 60000 ms"). With
+  it, `--packed` passes 12/12.
+- An off-store force-install (a CRX served from your own `update_url`) is only
+  honoured on Linux, via `/etc/opt/chrome/policies/managed/*.json`, or on
+  enterprise-managed (domain-joined / MDM-enrolled) Windows and macOS;
+  unmanaged Windows/macOS machines ignore off-store force-lists.
+
+A policy-installed CRX showed **no** 30 s `chrome.alarms` clamp
+(`alarm-scheduled` reports a 0 ms floor, `unlock-reported` ≈ the lockout);
+a Web Store install remains untested.
 
 ## What each check proves
 
@@ -100,15 +114,15 @@ has not been exercised locally.
 | `extension-loaded` | The extension's service worker is running and `chrome.runtime.id` is the pinned ID (so the host manifest's `allowed_origins` applies). Also waits for `onInstalled` to stamp `schemaVersion`. In `--packed` mode waits up to 60 s. |
 | `protocol-handshake` | From the service worker, `chrome.runtime.connectNative("com.focuscap.host")` + `postMessage({})` gets `{ok:true, protocolVersion:1}` within 5 s and no `onDisconnect` with `chrome.runtime.lastError`. **This single check proves the per-OS installer, the manifest/registry entry, `host.bat`/`host.js` and `node` on `PATH` all work for the launched browser** (#14 TC3/TC4/TC7). A failure reports the exact error text, e.g. `Specified native messaging host not found.` |
 | `lock` | With `focusSites: [{domain:"localhost", budgetSeconds, lockoutSeconds}]` seeded from the service worker, the fixture page is redirected to `time-is-up.html` within `budget + 5` s. Records `tLock`, `lockedUntil` and the block page text. |
-| `alarm-scheduled` | `chrome.alarms.getAll()` has `unlock:localhost`; reports `scheduledTime − lockedUntil` (0 unpacked; ≥ ~30 000 when a packed build is clamped, #17). Fails only if the alarm is missing. |
+| `alarm-scheduled` | `chrome.alarms.getAll()` has `unlock:localhost`; reports `scheduledTime − lockedUntil` (0 for unpacked and, as measured, for a policy-installed CRX; ≥ ~30 000 if a build is clamped, #17). Fails only if the alarm is missing. |
 | `host-wrote-state` | Within 5 s of the lock `<home>/.focuscap/state.json` has `schemaVersion:1`, `locked:true`, `sites.localhost.{locked:true, reason:"lockout"}`, `lastBlocked:"localhost"` and an `updatedAt` from this run. On POSIX also requires mode bits `0700` on `.focuscap` and `0600` on `state.json` (#10). |
-| `unlock-reported` | `state.json` flips to `locked:false` / `sites.localhost.locked:false`; the measured delay from the lock is reported prominently (`unlockDelayMs`, also in top-level `timings`). Passes within `lockout + 45` s (unpacked ≈ lockout; packed builds may clamp to 30 s). |
+| `unlock-reported` | `state.json` flips to `locked:false` / `sites.localhost.locked:false`; the measured delay from the lock is reported prominently (`unlockDelayMs`, also in top-level `timings`). Passes within `lockout + 45` s (≈ lockout for unpacked and policy-installed builds; a store build clamped to 30 s would still pass). |
 | `block-page-countdown` | The block page's reset line reads `You can go back now.` by `lockout + 3` s. |
 | `renavigate` | Opening the site again after the unlock stays on `localhost` (no redirect) and `usage.sites.localhost.totalMs === 0` — the lazy re-evaluation handed out a fresh allowance (#17 TC3). |
 | `options-reserved-names` | Through the real Dashboard add-site form (`options.html`), `__proto__`, `constructor`, `prototype` and `https://__proto__/x` add nothing to `focusSites`, while `proto.example.com` is accepted (#18 TC1). |
 | `proto-pollution` | In the service worker, feeding `sites: {"__proto__": {totalMs: 1}}` through `normalizeUsage` + `siteUsage` leaves `({}).totalMs` and `Object.prototype.lastTickAt` undefined and the `"__proto__"` lookup neither throws nor returns `Object.prototype` (#18 TC2). |
 | `schema-version` | `chrome.storage.local.schemaVersion === 1` and `state.json.schemaVersion === 1` (#16). |
-| `sw-console-clean` | No `error`-level console message or uncaught exception in the service worker during the run (warnings are reported, not failed). Any text matching `/native|protocol|Specified native/i` is surfaced in the detail. A canary message proves the capture itself is wired. |
+| `sw-console-clean` | No `error`-level console message or uncaught exception in the service worker during the run (warnings are reported, not failed). Any text matching `/native|protocol|Specified native/i` is surfaced in the detail. A canary message proves the capture itself is wired. With the host unregistered this still passes: `background.js` reads `chrome.runtime.lastError` on disconnect, so Chrome no longer logs `Unchecked runtime.lastError` as an error (one `debug` line is surfaced instead). |
 
 Dependencies: `lock` needs `extension-loaded`; `alarm-scheduled`,
 `host-wrote-state`, `block-page-countdown`, `renavigate` need `lock`;
@@ -135,6 +149,24 @@ skipped.
 
 `pass` on a skipped check is `null` with `skipped: true`. Top-level `pass` is
 true only when no check failed and the harness itself did not error.
+
+## Measured results (2026-10-18, EC2 sandboxes, headless, budget 5 s / lockout 20 s)
+
+| OS | Browser | Mode | Result | Unlock delay |
+|---|---|---|---|---|
+| Ubuntu 24.04 | Chrome 155 | unpacked | 12/12 | ≈ 20 s |
+| Ubuntu 24.04 | Chrome 155 | `--packed` (policy CRX, `DeveloperToolsAvailability: 1`) | 12/12 | ≈ 20 s (alarm fired 1-2 ms late; no 30 s clamp) |
+| Windows Server 2022 | Chrome 155 | unpacked | pass (handshake + chain) | ≈ lockout |
+| Windows Server 2022 | Chrome Beta 157 | unpacked | pass (handshake + chain) | ≈ lockout |
+| Windows Server 2022 | Edge 155 | unpacked | pass (handshake + chain) | ≈ lockout |
+| macOS 15 | Chrome 155 | unpacked, manifest in `<user-data-dir>/NativeMessagingHosts` | 12/12 | ≈ lockout |
+| macOS 15 | Chrome 155 | unpacked, manifest only under `~/Library` | `protocol-handshake` fails (host not found) | — |
+
+Windows registry keys actually consulted (one key present at a time): Chrome
+and Chrome Beta read `Software\Google\Chrome` only; Edge reads
+`Software\Microsoft\Edge`, `Software\Chromium` and `Software\Google\Chrome`.
+Chrome Canary, Chromium and Edge Beta/Dev were not installed, so their keys
+are untested.
 
 ## Caveats
 

@@ -104,14 +104,22 @@ describe("README.md claims match the code", () => {
     expect(lockout.min).toBe("1");
     expect(lockout.step).toBe("1");
     expect(README).toMatch(/cool-down field takes whole minutes \(minimum 1\)/);
-    // README Known gaps (#17): a packed/store build clamps chrome.alarms to a
-    // 30-second minimum, so the companion can hear about a sub-30 s cool-down
-    // late; the number must match background.js's ALARM_MIN_DELAY_MS.
+    // README Known gaps (#17): Chrome documents a 30-second chrome.alarms
+    // minimum for non-unpacked builds (not observed for a policy-installed
+    // CRX on Chrome 155; a store install is untested), so the companion could
+    // hear about a sub-30 s cool-down late; the number must match
+    // background.js's ALARM_MIN_DELAY_MS, which arms the early-push timer.
     const { ALARM_MIN_DELAY_MS } = await import("../background.js");
     expect(ALARM_MIN_DELAY_MS).toBe(30_000);
     // (\s+ because README wraps at 78 columns.)
-    expect(README).toMatch(/packed\/store\s+build Chrome \(120\+; 1 min before\) clamps `chrome\.alarms` to a 30-second\s+minimum/);
+    expect(README).toMatch(/Chrome documents a 30-second minimum for `chrome\.alarms` in non-unpacked\s+builds \(120\+; 1 min before\), but it was NOT observed for a policy-installed\s+CRX on Chrome 155/);
+    expect(README).toMatch(/a Web Store install is untested/);
     expect(README).toMatch(/companion pill may be told up to 30 s late/);
+    // README Known gaps (#14): connectNative is confirmed in real browsers on
+    // all three OSes; only the untested channel keys remain open.
+    expect(README).toMatch(/Chrome, Chrome\s+Beta and Edge on Windows Server 2022, Chrome on macOS 15/);
+    expect(README).toMatch(/Chrome on Ubuntu\s+24\.04/);
+    expect(README).toMatch(/only the Chrome\s+Canary\/Chromium\/Edge Beta\/Dev channel registry keys \(#14\)/);
   });
 });
 
