@@ -154,12 +154,13 @@ true only when no check failed and the harness itself did not error.
 
 | OS | Browser | Mode | Result | Unlock delay |
 |---|---|---|---|---|
-| Ubuntu 24.04 | Chrome 155 | unpacked | 12/12 | ≈ 20 s |
-| Ubuntu 24.04 | Chrome 155 | `--packed` (policy CRX, `DeveloperToolsAvailability: 1`) | 12/12 | ≈ 20 s (alarm fired 1-2 ms late; no 30 s clamp) |
-| Windows Server 2022 | Chrome 155 | unpacked | pass (handshake + chain) | ≈ lockout |
-| Windows Server 2022 | Chrome Beta 157 | unpacked | pass (handshake + chain) | ≈ lockout |
-| Windows Server 2022 | Edge 155 | unpacked | pass (handshake + chain) | ≈ lockout |
-| macOS 15 | Chrome 155 | unpacked, manifest in `<user-data-dir>/NativeMessagingHosts` | 12/12 | ≈ lockout |
+| Ubuntu 24.04 | Chrome 155.0.8059.84 | unpacked | 12/12 | 19 887 ms (verifier: 19 885 ms) |
+| Ubuntu 24.04 | Chrome 155.0.8059.84 | `--packed` (policy CRX, `DeveloperToolsAvailability: 1`) | 12/12 | 19 893 ms (alarm fired 1-2 ms late; no 30 s clamp) |
+| Ubuntu 24.04 | Chrome 155.0.8059.84 | unpacked, Electron companion on Xvfb | 12/12; pill shown 0.7 s after the lock, gone 0.9 s after the unlock | 20 004 ms |
+| Windows Server 2022 | Chrome 155.0.8059.85 (as SYSTEM) | unpacked | 12/12 | 19 901 ms (verifier: 19 902 ms) |
+| Windows Server 2022 | Chrome Beta 157.0.8103.6 (as SYSTEM) | unpacked | 12/12 | 20 038 ms |
+| Windows Server 2022 | Edge 155.0.4283.45 (as NETWORK SERVICE) | unpacked | 12/12 | 19 882 ms (verifier: 19 958 ms) |
+| macOS 15.8 (arm64) | Chrome 155.0.8059.85 | unpacked, manifest in `<user-data-dir>/NativeMessagingHosts` | 12/12 | 20 115 ms |
 | macOS 15 | Chrome 155 | unpacked, manifest only under `~/Library` | `protocol-handshake` fails (host not found) | — |
 
 Windows registry keys actually consulted (one key present at a time): Chrome
