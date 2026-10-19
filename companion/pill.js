@@ -51,6 +51,14 @@ if (typeof window !== "undefined" && window.focusCap) {
       lines.length > 1 ? `and ${lines.length - 1} more locked` : lines.length ? "is locked" : "is out of time today";
     document.getElementById("domain").title = lines.join("\n");
   };
-  refresh();
+  // Tell main once the current state is painted, so it can show the (reused,
+  // hidden) window without flashing the previous lock's text. Report even if
+  // reading the state failed, so the pill never stays hidden on an error.
+  const refreshAndReport = () =>
+    refresh()
+      .catch(() => {})
+      .then(() => window.focusCap.rendered && window.focusCap.rendered());
+  if (window.focusCap.onRefresh) window.focusCap.onRefresh(refreshAndReport);
+  refreshAndReport();
   setInterval(refresh, 2000);
 }

@@ -17,6 +17,7 @@
 const { app, Tray, Menu, BrowserWindow, ipcMain, nativeImage, screen } = require("electron");
 const path = require("path");
 const { readState, writeState } = require("../state-store");
+const { createPillController } = require("./pill-controller");
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -32,9 +33,9 @@ const TRAY_ICON_DATA_URL =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAJUlEQVR4AWNgGAWjYBSMglEwCkbBKBgFo2AUjIJRMApGwUAEAB0AAQEFsCVOAAAAAElFTkSuQmCC";
 
 let tray = null;
-let pillWindow = null;
 let pollTimer = null;
 let wasLocked = false;
+let quitting = false;
 
 // Bottom-right corner of the primary display's work area (excludes the
 // taskbar/dock), matching where the in-page badge sits in content.js.
@@ -46,13 +47,12 @@ function pillPosition() {
   };
 }
 
-function showPill() {
-  if (pillWindow) {
-    pillWindow.showInactive();
-    return;
-  }
+// One pill window for the app's whole life (see pill-controller.js): created
+// hidden at startup, then shown and hidden instead of destroyed and rebuilt,
+// so a lock never waits on a cold renderer start.
+function createPillWindow() {
   const { x, y } = pillPosition();
-  pillWindow = new BrowserWindow({
+  const win = new BrowserWindow({
     width: PILL_WIDTH,
     height: PILL_HEIGHT,
     x,
@@ -75,28 +75,40 @@ function showPill() {
       nodeIntegration: false
     }
   });
-  pillWindow.setAlwaysOnTop(true, "floating");
+  win.setAlwaysOnTop(true, "floating");
   // Click-through: clicks land on whatever is underneath, so the pill can't
   // block interaction with the app behind it either.
-  pillWindow.setIgnoreMouseEvents(true);
-  pillWindow.loadFile(path.join(__dirname, "pill.html"));
-  pillWindow.once("ready-to-show", () => pillWindow && pillWindow.showInactive());
-  pillWindow.on("closed", () => {
-    pillWindow = null;
+  win.setIgnoreMouseEvents(true);
+  win.loadFile(path.join(__dirname, "pill.html"));
+  // "closed" is the single cleanup path: a crashed renderer is destroyed here
+  // and its "closed" event then tells the controller to rebuild lazily.
+  win.on("closed", () => {
+    if (!quitting) pill.windowGone(handle);
   });
+  win.webContents.on("render-process-gone", () => {
+    if (!win.isDestroyed()) win.destroy();
+  });
+  const handle = {
+    showInactive: () => {
+      // The work area can change while the pill sits hidden (display or
+      // taskbar changes), so re-anchor it each time it is shown.
+      const p = pillPosition();
+      win.setBounds({ x: p.x, y: p.y, width: PILL_WIDTH, height: PILL_HEIGHT });
+      win.showInactive();
+    },
+    hide: () => win.hide(),
+    requestRefresh: () => win.webContents.send("focuscap:refresh"),
+    isDestroyed: () => win.isDestroyed()
+  };
+  return handle;
 }
 
-function hidePill() {
-  if (pillWindow) {
-    pillWindow.close();
-    pillWindow = null;
-  }
-}
+const pill = createPillController({ createWindow: createPillWindow });
 
 function poll() {
   const state = readState();
-  if (state.locked && !wasLocked) showPill();
-  if (!state.locked && wasLocked) hidePill();
+  if (state.locked && !wasLocked) pill.show();
+  if (!state.locked && wasLocked) pill.hide();
   wasLocked = state.locked;
   if (tray) tray.setToolTip(state.locked ? `Focus Cap — ${state.lastBlocked || "a tracked site"} is locked` : "Focus Cap");
 }
@@ -127,6 +139,8 @@ app.whenReady().then(() => {
   tray.setContextMenu(buildTrayMenu());
 
   ipcMain.handle("get-state", () => readState());
+  ipcMain.on("focuscap:rendered", () => pill.rendered());
+  pill.warm();
 
   poll();
   pollTimer = setInterval(poll, POLL_MS);
@@ -138,5 +152,6 @@ app.on("window-all-closed", (e) => {
 });
 
 app.on("before-quit", () => {
+  quitting = true;
   if (pollTimer) clearInterval(pollTimer);
 });
