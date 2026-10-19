@@ -1,9 +1,12 @@
 # Focus Cap companion
 
-A menubar/tray app that surfaces the extension's lock state at the OS level
-— a small, **non-blocking**, always-on-top corner pill listing which tracked
-sites are locked and until when (cool-down end, schedule rule or global
-blackout end, or midnight), visible no matter what app is in front.
+A menubar/tray app that surfaces the extension's blocks at the OS level — a
+small, **non-blocking**, always-on-top corner pill that flashes for about
+3.5 seconds each time you get blocked (a site's time runs out, or you try to
+open a site that is still locked), listing which tracked sites are locked and
+until when (cool-down end, schedule rule or global blackout end, or
+midnight), visible no matter what app is in front. It does not stay up for
+the whole lock.
 
 It deliberately does **not** cover the screen. The extension's promise is
 "distraction *sites* are locked", not "your computer is locked", and until
@@ -36,7 +39,11 @@ shows it without an unlock time).
 
 This app never talks to the extension directly — it just polls a small JSON
 file (`~/.focuscap/state.json`, see `../state-store.js`) once a second.
-`locked` (true when *any* tracked site is locked) shows/hides the pill;
+`blockedAt` (stamped by the extension on every block) flashes the pill for
+`FLASH_MS` (3.5 s) once it is on screen, then it hides itself; `locked` (true
+when *any* tracked site is locked) going false hides it early. Blocks from
+before the companion started are not replayed, and a writer without
+`blockedAt` still flashes on the unlocked -> locked change;
 `sites` (`{ [domain]: { locked, reason, until, remainingMs } }`) is what the
 pill lists, most recently blocked first; `lastBlocked` is a legacy fallback.
 The file also carries `schemaVersion` (an integer, currently 1, stamped by

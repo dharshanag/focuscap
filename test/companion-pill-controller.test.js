@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createPillController, FALLBACK_MS } from "../companion/pill-controller.js";
+import { createPillController, FALLBACK_MS, FLASH_MS } from "../companion/pill-controller.js";
 
 // A fake BrowserWindow handle (the shape main.js's createPillWindow() returns)
 // that records every call, plus manual timers so the fallback is deterministic.
@@ -150,4 +150,51 @@ describe("companion/pill-controller.js", () => {
     pill.show();
     expect(timers.filter((t) => !t.cleared)).toHaveLength(1);
   });
+  it("flash() shows the pill and hides it FLASH_MS after it is actually on screen", () => {
+    const { pill, windows, timers } = harness();
+    pill.warm();
+    pill.rendered();
+    pill.flash();
+    expect(timers.filter((t) => !t.cleared && t.ms === FLASH_MS)).toHaveLength(0); // not visible yet: no countdown
+    pill.rendered(); // repainted -> shown
+    const hideT = timers.filter((t) => !t.cleared && t.ms === FLASH_MS);
+    expect(hideT).toHaveLength(1);
+    expect(windows[0].calls).toEqual(["refresh", "show"]);
+    hideT[0].cleared = true;
+    hideT[0].fn();
+    expect(windows[0].calls).toEqual(["refresh", "show", "hide"]);
+    expect(pill.state).toMatchObject({ wantVisible: false, pendingHide: false });
+  });
+
+  it("a second flash while the pill is up restarts the countdown instead of stacking timers", () => {
+    const { pill, timers } = harness();
+    pill.warm();
+    pill.rendered();
+    pill.flash();
+    pill.rendered();
+    pill.flash(); // e.g. a second site got blocked
+    pill.rendered();
+    expect(timers.filter((t) => !t.cleared && t.ms === FLASH_MS)).toHaveLength(1);
+  });
+
+  it("hide() during a flash cancels the countdown (unlock wins)", () => {
+    const { pill, windows, timers } = harness();
+    pill.warm();
+    pill.rendered();
+    pill.flash();
+    pill.rendered();
+    pill.hide();
+    expect(timers.filter((t) => !t.cleared)).toHaveLength(0);
+    expect(windows[0].calls.at(-1)).toBe("hide");
+  });
+
+  it("the flash fallback still starts the countdown when the renderer never reports", () => {
+    const { pill, timers } = harness();
+    pill.warm();
+    pill.rendered();
+    pill.flash(2000);
+    timers.filter((t) => !t.cleared && t.ms === FALLBACK_MS).forEach((t) => ((t.cleared = true), t.fn()));
+    expect(timers.filter((t) => !t.cleared && t.ms === 2000)).toHaveLength(1);
+  });
 });
+

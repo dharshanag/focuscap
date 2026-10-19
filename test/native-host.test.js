@@ -287,6 +287,11 @@ describe("native-host/host.js", () => {
       const host = await import("../native-host/host.js");
       const patch = host.sanitizeStatePatch({ locked: true, lastBlocked: "example.com" });
       expect(patch).toEqual({ locked: true, lastBlocked: "example.com" });
+      // blockedAt (the extension's per-block stamp) is kept only as a finite number.
+      expect(host.sanitizeStatePatch({ locked: true, lastBlocked: "example.com", blockedAt: 1234 })).toEqual({ locked: true, lastBlocked: "example.com", blockedAt: 1234 });
+      for (const bad of ["1234", NaN, Infinity, null, {}]) {
+        expect(host.sanitizeStatePatch({ blockedAt: bad })).toEqual({});
+      }
       expect(patch).not.toHaveProperty("budgetMs");
       expect(patch).not.toHaveProperty("focusSites");
       expect(patch).not.toHaveProperty("remainingMs");

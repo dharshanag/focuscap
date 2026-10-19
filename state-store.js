@@ -24,6 +24,9 @@ const DEFAULT_STATE = {
   // Per-site lock state: { [domain]: { locked, reason, until, remainingMs } }
   sites: {},
   lastBlocked: "",
+  // Time of the most recent real block (ms); the companion flashes its pill
+  // once per new value.
+  blockedAt: 0,
   updatedAt: 0
 };
 

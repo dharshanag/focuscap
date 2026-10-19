@@ -663,6 +663,26 @@ describe("background.js", () => {
       expect(getStore().lastBlockedReason).toBe("schedule");
       expect(getStore().lastBlockedUntil).toBe(new Date(2026, 0, 14, 17, 0, 0, 0).getTime());
     });
+
+    it("each block tells the companion when it happened (blockedAt), so the pill flashes per block", async () => {
+      fixedClock(10);
+      const { bg, chrome } = await loadBackground({
+        focusSites: [{ domain: "youtube.com", rules: [{ type: "block", days: [3], start: "09:00", end: "17:00" }] }],
+        budgetSeconds: 3600
+      });
+      const posted = [];
+      chrome.runtime.connectNative = () => ({ postMessage: (m) => posted.push(m), onDisconnect: { addListener: () => {} } });
+      await bg.guardNavigation({ frameId: 0, tabId: 7, url: "https://m.youtube.com/watch?v=1" });
+      const blockMsgs = posted.filter((m) => m && m.lastBlocked === "m.youtube.com" && m.locked === true);
+      expect(blockMsgs).toHaveLength(1);
+      expect(blockMsgs[0].blockedAt).toBe(Date.now());
+      // A second attempt is a new block with its own stamp.
+      vi.setSystemTime(Date.now() + 5000);
+      await bg.guardNavigation({ frameId: 0, tabId: 7, url: "https://m.youtube.com/" });
+      const again = posted.filter((m) => m && m.lastBlocked === "m.youtube.com" && m.locked === true);
+      expect(again).toHaveLength(2);
+      expect(again[1].blockedAt).toBe(again[0].blockedAt + 5000);
+    });
   });
 
   // --- Midnight unlock push: without this, the companion app's overlay can

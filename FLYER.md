@@ -135,7 +135,7 @@ for setup.
 | **Accounts** | None. |
 | **Data collected** | None sent anywhere. Locally: a 14-day log of time per site plus your settings, in the browser's extension storage. |
 | **Permissions** | Access to every page (`<all_urls>`, for the small script that measures engaged time — the basis of the per-site log), storage (your settings), navigation (to block before load), alarms (midnight reset and unlock timers), native messaging (companion, optional). |
-| **Tested** | 300+ automated tests in CI, plus end-to-end runs in a real browser through the native host to the companion. |
+| **Tested** | 400+ automated tests in CI, plus end-to-end runs in a real browser through the native host to the companion. |
 
 ---
 

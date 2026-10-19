@@ -504,7 +504,10 @@ function notifyNativeHost(patch) {
 async function redirectToBlock(tabId, hostname, status) {
   const lastBlocked = (hostname || "").replace(/^www\./, "");
   await set({ lastBlocked, lastBlockedUntil: (status && status.until) || null, lastBlockedReason: (status && status.reason) || null });
-  notifyNativeHost({ locked: true, lastBlocked });
+  // blockedAt marks THIS block (a site running out mid-visit, or a later
+  // attempt to open a locked site): the companion flashes its pill for each
+  // new value instead of showing it for the whole lock.
+  notifyNativeHost({ locked: true, lastBlocked, blockedAt: Date.now() });
   await chrome.tabs.update(tabId, { url: chrome.runtime.getURL(BLOCK_PAGE) }).catch(() => {});
 }
 

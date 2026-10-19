@@ -13,8 +13,12 @@
 // reports "rendered" (or after FALLBACK_MS, so a hung renderer can't keep
 // the pill hidden). A hide that arrives during that wait wins.
 const FALLBACK_MS = 750;
+// How long a block notice stays up once it is actually on screen.
+const FLASH_MS = 3500;
 
 function createPillController({ createWindow, setTimer = setTimeout, clearTimer = clearTimeout, fallbackMs = FALLBACK_MS }) {
+  let hideTimer = null;
+  let flashMs = null; // set by flash(): start the hide countdown once actually visible
   let win = null;
   let ready = false; // the renderer has loaded and reported at least once
   let wantVisible = false;
@@ -38,9 +42,30 @@ function createPillController({ createWindow, setTimer = setTimeout, clearTimer 
     return win;
   }
 
+  function cancelHideTimer() {
+    if (hideTimer !== null) {
+      clearTimer(hideTimer);
+      hideTimer = null;
+    }
+  }
+
+  function hideNow() {
+    wantVisible = false;
+    flashMs = null;
+    cancelFallback();
+    cancelHideTimer();
+    if (alive()) win.hide();
+  }
+
   function reveal() {
     cancelFallback();
-    if (wantVisible && alive()) win.showInactive();
+    if (!(wantVisible && alive())) return;
+    win.showInactive();
+    if (flashMs !== null) {
+      cancelHideTimer();
+      hideTimer = setTimer(hideNow, flashMs);
+      flashMs = null;
+    }
   }
 
   return {
@@ -59,9 +84,15 @@ function createPillController({ createWindow, setTimer = setTimeout, clearTimer 
     },
 
     hide() {
-      wantVisible = false;
-      cancelFallback();
-      if (alive()) win.hide();
+      hideNow();
+    },
+
+    // Show the pill for `ms` once it is on screen, then hide it. A new flash
+    // while one is up restarts the countdown (after the repaint).
+    flash(ms = FLASH_MS) {
+      cancelHideTimer();
+      flashMs = ms;
+      this.show();
     },
 
     // The renderer finished painting the current state.
@@ -86,9 +117,9 @@ function createPillController({ createWindow, setTimer = setTimeout, clearTimer 
 
     // For tests and diagnostics.
     get state() {
-      return { hasWindow: Boolean(alive()), ready, wantVisible, pendingFallback: fallback !== null };
+      return { hasWindow: Boolean(alive()), ready, wantVisible, pendingFallback: fallback !== null, pendingHide: hideTimer !== null };
     }
   };
 }
 
-module.exports = { createPillController, FALLBACK_MS };
+module.exports = { createPillController, FALLBACK_MS, FLASH_MS };

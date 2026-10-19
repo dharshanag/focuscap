@@ -178,10 +178,11 @@ a minute. Set "After limit" to "block for 1 min" to watch it unlock again.
 - `icons/` — extension icons (16/32/48/128 px) and their source.
 - `test/` — Vitest + jsdom test suite (`npm test`); `.github/workflows/test.yml`
   runs it in CI.
-- `companion/` — a desktop menubar app (Electron) that shows a small,
-  non-blocking, always-on-top corner pill at the OS level listing which
-  tracked sites are locked and until when — the extension alone is only
-  visible inside the browser. See its README.
+- `companion/` — a desktop menubar app (Electron) that flashes a small,
+  non-blocking, always-on-top corner pill at the OS level for about 3.5 s
+  each time you get blocked, listing which tracked sites are locked and until
+  when — the extension alone is only visible inside the browser. See its
+  README.
 - `native-host/` — the Chrome Native Messaging host that bridges the
   extension to `companion/`; wired end to end once registered with the
   per-OS install scripts (see its README).

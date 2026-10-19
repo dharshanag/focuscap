@@ -70,7 +70,8 @@ function encodeFrame(message) {
 // extension input straight into the shared state file. This is a PARTIAL
 // patch: fields that are absent or wrong-typed are omitted rather than
 // defaulted, so writeState()'s merge keeps the last-known value. (The
-// extension's block-time notification only sends {locked, lastBlocked};
+// extension's block-time notification only sends {locked, lastBlocked,
+// blockedAt};
 // defaulting the rest to 0/[] here used to wipe budgetMs/focusSites that an
 // earlier heartbeat had already reported.)
 function sanitizeStatePatch(msg) {
@@ -81,6 +82,7 @@ function sanitizeStatePatch(msg) {
   if (typeof src.budgetMs === "number") patch.budgetMs = src.budgetMs;
   if (Array.isArray(src.focusSites)) patch.focusSites = sanitizeFocusSites(src.focusSites);
   if (typeof src.lastBlocked === "string") patch.lastBlocked = src.lastBlocked;
+  if (typeof src.blockedAt === "number" && Number.isFinite(src.blockedAt)) patch.blockedAt = src.blockedAt;
   if (src.sites && typeof src.sites === "object" && !Array.isArray(src.sites)) {
     patch.sites = sanitizeSites(src.sites);
   }

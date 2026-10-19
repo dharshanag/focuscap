@@ -1,8 +1,9 @@
 // Focus Cap companion — a menubar/tray app that surfaces the extension's lock
 // state at the OS level, so it's visible no matter what app is in front.
 //
-// It shows a small, NON-BLOCKING, always-on-top corner pill while a tracked
-// site is locked. It deliberately does not cover the screen: the extension's
+// It flashes a small, NON-BLOCKING, always-on-top corner pill for a few
+// seconds each time the user gets blocked (see block-watcher.js), rather than
+// keeping it up for the whole lock. It deliberately does not cover the screen: the extension's
 // promise is "distraction *sites* are locked", not "your computer is locked",
 // and until the companion can detect a tracked site in the foreground
 // (outside Chrome), it has no way to know whether blocking anything is even
@@ -18,6 +19,7 @@ const { app, Tray, Menu, BrowserWindow, ipcMain, nativeImage, screen } = require
 const path = require("path");
 const { readState, writeState } = require("../state-store");
 const { createPillController } = require("./pill-controller");
+const { createBlockWatcher } = require("./block-watcher");
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -34,7 +36,6 @@ const TRAY_ICON_DATA_URL =
 
 let tray = null;
 let pollTimer = null;
-let wasLocked = false;
 let quitting = false;
 
 // Bottom-right corner of the primary display's work area (excludes the
@@ -105,11 +106,14 @@ function createPillWindow() {
 
 const pill = createPillController({ createWindow: createPillWindow });
 
+// Blocks that happened before the companion started are not replayed.
+const watchBlocks = createBlockWatcher(readState());
+
 function poll() {
   const state = readState();
-  if (state.locked && !wasLocked) pill.show();
-  if (!state.locked && wasLocked) pill.hide();
-  wasLocked = state.locked;
+  const action = watchBlocks(state);
+  if (action === "flash") pill.flash();
+  if (action === "hide") pill.hide();
   if (tray) tray.setToolTip(state.locked ? `Focus Cap — ${state.lastBlocked || "a tracked site"} is locked` : "Focus Cap");
 }
 

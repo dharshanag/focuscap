@@ -168,4 +168,7 @@ mismatch (GitHub issue #12, phase 1 — no UI yet). Then check
 `~/.focuscap/state.json` — it should show `"locked": true`,
 `"lastBlocked": "example.com"` and the `sites` entry. With the companion app
 running, its pill should appear within a second (polling interval) reading
-"example.com until HH:MM".
+"example.com until HH:MM" for about 3.5 s — but only if the frame carries a
+new `blockedAt` (add `blockedAt: Date.now()` to `msg`), which the extension
+stamps on every real block; a plain `locked: true` flashes it only on the
+unlocked -> locked change.
