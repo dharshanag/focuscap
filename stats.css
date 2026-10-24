@@ -5,7 +5,7 @@
   --panel-2: #22222f;
   --text: #e7e7f0;
   --muted: #9a9ab0;
-  --accent: #a78bfa;
+  --accent: #60a5fa;
   --distraction: #f87171;
   --productive: #34d399;
   --neutral: #7a7a90;
@@ -19,7 +19,7 @@
   --panel-2: #ececf1;
   --text: #1b1b26;
   --muted: #63637a;
-  --accent: #7c3aed;
+  --accent: #1d4ed8;
   --distraction: #dc2626;
   --productive: #059669;
   --neutral: #6b6b80;
@@ -96,7 +96,7 @@ h2 {
 .chip.distraction { background: rgba(248,113,113,0.18); color: var(--distraction); }
 .chip.productive { background: rgba(52,211,153,0.18); color: var(--productive); }
 .chip.neutral { background: var(--edge); color: var(--neutral); }
-.chip.blocked { background: rgba(167,139,250,0.18); color: var(--accent); }
+.chip.blocked { background: rgba(96,165,250,0.18); color: var(--accent); }
 .meter { height: 5px; background: var(--edge); border-radius: 999px; margin-top: 8px; overflow: hidden; }
 .meter-fill { height: 100%; border-radius: 999px; background: var(--neutral); }
 .meter-fill.distraction { background: var(--distraction); }
@@ -105,10 +105,10 @@ h2 {
 
 .block-btn {
   font-size: 12px; font-weight: 600; color: var(--accent);
-  background: rgba(167,139,250,0.12); border: 1px solid rgba(167,139,250,0.35);
+  background: rgba(96,165,250,0.12); border: 1px solid rgba(96,165,250,0.35);
   border-radius: 8px; padding: 6px 12px; cursor: pointer; white-space: nowrap;
 }
-.block-btn:hover { background: rgba(167,139,250,0.22); }
+.block-btn:hover { background: rgba(96,165,250,0.22); }
 .blocked-tag { font-size: 12px; color: var(--accent); opacity: 0.8; white-space: nowrap; }
 
 .empty { color: var(--muted); padding: 12px 2px; }

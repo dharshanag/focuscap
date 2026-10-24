@@ -119,25 +119,27 @@
       </section>
 
       <!-- Advanced -->
-      <section class="card">
-        <h2>Advanced</h2>
-        <label class="check-row">
-          <input id="idleEnabled" type="checkbox" />
-          <span>Pause the timer when I'm inactive</span>
-        </label>
-        <p class="muted">
-          When on, time stops counting after a stretch of no mouse/keyboard
-          activity, so stepping away doesn't burn your budget.
-        </p>
-        <label class="field-row" id="idleSecondsRow">
-          Pause after this many seconds of no activity
-          <span><input id="idleInput" type="number" min="5" step="5" /> s</span>
-        </label>
-        <div class="save-row">
-          <button id="saveAdvanced" class="primary-btn" type="button">Save</button>
-          <span id="advancedSaved" class="saved-msg" hidden>Saved ✓</span>
+      <details class="card advanced-card">
+        <summary class="advanced-summary">Advanced</summary>
+        <div class="advanced-body">
+          <label class="check-row">
+            <input id="idleEnabled" type="checkbox" />
+            <span>Pause the timer when I'm inactive</span>
+          </label>
+          <p class="muted">
+            When on, time stops counting after a stretch of no mouse/keyboard
+            activity, so stepping away doesn't burn your budget.
+          </p>
+          <label class="field-row" id="idleSecondsRow">
+            Pause after this many seconds of no activity
+            <span><input id="idleInput" type="number" min="5" step="5" /> s</span>
+          </label>
+          <div class="save-row">
+            <button id="saveAdvanced" class="primary-btn" type="button">Save</button>
+            <span id="advancedSaved" class="saved-msg" hidden>Saved ✓</span>
+          </div>
         </div>
-      </section>
+      </details>
     </main>
 
     <script src="shared.js"></script>

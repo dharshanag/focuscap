@@ -9,7 +9,7 @@ const DISTRACTION_DOMAINS = [
   "primevideo.com", "disneyplus.com", "hbomax.com", "max.com", "pinterest.com",
   "snapchat.com", "tumblr.com", "9gag.com", "buzzfeed.com", "imgur.com",
   "quora.com", "threads.net", "dailymotion.com", "espn.com", "ign.com",
-  "kotaku.com", "polygon.com", "tmz.com", "vice.com", "ladbible.com"
+  "kotaku.com", "polygon.com", "tmz.com", "vice.com", "ladbible.com", "open.spotify.com"
 ];
 
 const PRODUCTIVE_DOMAINS = [
@@ -19,7 +19,8 @@ const PRODUCTIVE_DOMAINS = [
   "notion.so", "figma.com", "linear.app", "atlassian.net", "trello.com",
   "asana.com", "slack.com", "overleaf.com", "wikipedia.org", "khanacademy.org",
   "coursera.org", "udemy.com", "edx.org", "leetcode.com", "hackerrank.com",
-  "canva.com", "zoom.us", "office.com", "dropbox.com", "duolingo.com"
+  "canva.com", "zoom.us", "office.com", "dropbox.com", "duolingo.com",
+  "classroom.google.com"
 ];
 
 // Classify a hostname/domain. `blocked` overrides to "distraction" visually,
