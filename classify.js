@@ -19,7 +19,7 @@ const PRODUCTIVE_DOMAINS = [
   "asana.com", "slack.com", "overleaf.com", "wikipedia.org", "khanacademy.org",
   "coursera.org", "udemy.com", "edx.org", "leetcode.com", "hackerrank.com",
   "canva.com", "zoom.us", "office.com", "dropbox.com", "duolingo.com", 
-  "classroom.google.com"
+  "classroom.google.com", "google.com","congressionalappchallenge.us"
 ];
 
 // Classify a hostname/domain. `blocked` overrides to "distraction" visually,
